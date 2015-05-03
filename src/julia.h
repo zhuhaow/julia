@@ -873,18 +873,6 @@ STATIC_INLINE int jl_is_tuple_type(void *t)
             ((jl_datatype_t*)(t))->name == jl_tuple_typename);
 }
 
-STATIC_INLINE int jl_is_vararg_type(jl_value_t *v)
-{
-    return (jl_is_datatype(v) &&
-            ((jl_datatype_t*)(v))->name == jl_vararg_type->name);
-}
-
-STATIC_INLINE int jl_is_va_tuple(jl_datatype_t *t)
-{
-    size_t l = jl_svec_len(t->parameters);
-    return (l>0 && jl_is_vararg_type(jl_tparam(t,l-1)));
-}
-
 STATIC_INLINE int jl_is_ntuple_type(jl_value_t *v)
 {
     return (jl_is_datatype(v) &&
@@ -936,7 +924,7 @@ DLLEXPORT jl_datatype_t *jl_new_datatype(jl_sym_t *name, jl_datatype_t *super,
 DLLEXPORT jl_datatype_t *jl_new_bitstype(jl_value_t *name, jl_datatype_t *super,
                                          jl_svec_t *parameters, size_t nbits);
 jl_datatype_t *jl_wrap_Type(jl_value_t *t);  // x -> Type{x}
-jl_datatype_t *jl_wrap_vararg(jl_value_t *t);
+jl_datatype_t *jl_wrap_vararg(jl_value_t *t, jl_value_t *n);
 
 // constructors
 DLLEXPORT jl_value_t *jl_new_bits(jl_value_t *bt, void *data);
@@ -1016,6 +1004,46 @@ DLLEXPORT ssize_t jl_unbox_gensym(jl_value_t *v);
 #define jl_is_long(x)    jl_is_int32(x)
 #define jl_long_type     jl_int32_type
 #endif
+
+typedef enum {
+    JL_VARARG_NONE    = 0,
+    JL_VARARG_INT     = 1,
+    JL_VARARG_BOUND   = 2,
+    JL_VARARG_UNBOUND = 3
+} JL_VARARG_KIND;
+
+STATIC_INLINE int jl_is_vararg_type(jl_value_t *v)
+{
+    return (jl_is_datatype(v) &&
+            ((jl_datatype_t*)(v))->name == jl_vararg_type->name);
+}
+
+STATIC_INLINE JL_VARARG_KIND jl_vararg_kind(jl_value_t *v)
+{
+    if (!jl_is_vararg_type(v))
+        return JL_VARARG_NONE;
+    jl_value_t *lenv = jl_tparam1(v);
+    if (jl_is_long(lenv))
+        return JL_VARARG_INT;
+    assert(jl_is_typevar(lenv));
+    return ((jl_tvar_t*)lenv)->bound ? JL_VARARG_BOUND : JL_VARARG_UNBOUND;
+}
+
+STATIC_INLINE int jl_is_va_tuple(jl_datatype_t *t)
+{
+    assert(jl_is_tuple_type(t));
+    size_t l = jl_svec_len(t->parameters);
+    return (l>0 && jl_is_vararg_type(jl_tparam(t,l-1)));
+}
+
+STATIC_INLINE JL_VARARG_KIND jl_va_tuple_kind(jl_datatype_t *t)
+{
+    assert(jl_is_tuple_type(t));
+    size_t l = jl_svec_len(t->parameters);
+    if (l == 0)
+        return JL_VARARG_NONE;
+    return jl_vararg_kind(jl_tparam(t,l-1));
+}
 
 // structs
 DLLEXPORT int         jl_field_index(jl_datatype_t *t, jl_sym_t *fld, int err);

@@ -644,7 +644,8 @@ static jl_function_t *cache_method(jl_methtable_t *mt, jl_tupletype_t *type,
     // in general, here we want to find the biggest type that's not a
     // supertype of any other method signatures. so far we are conservative
     // and the types we find should be bigger.
-    if (!isstaged && jl_nparams(type) > mt->max_args && jl_is_va_tuple(decl)) {
+    if (!isstaged && jl_nparams(type) > mt->max_args
+        && jl_va_tuple_kind(decl) == JL_VARARG_UNBOUND) {
         size_t nspec = mt->max_args + 2;
         limited = jl_alloc_svec(nspec);
         for(i=0; i < nspec-1; i++) {
@@ -671,7 +672,7 @@ static jl_function_t *cache_method(jl_methtable_t *mt, jl_tupletype_t *type,
             // avoid Type{Type{...}...}...
             if (jl_is_type_type(lasttype) && jl_is_type_type(jl_tparam0(lasttype)))
                 lasttype = (jl_value_t*)jl_type_type;
-            jl_svecset(limited, i, jl_wrap_vararg(lasttype));
+            jl_svecset(limited, i, jl_wrap_vararg(lasttype, (jl_value_t*)NULL));
         }
         else {
             jl_value_t *lastdeclt = jl_tparam(decl,jl_nparams(decl)-1);
@@ -1081,8 +1082,8 @@ static void check_ambiguous(jl_methlist_t *ml, jl_tupletype_t *type,
     size_t sl = jl_nparams(sig);
     // we know !jl_args_morespecific(type, sig)
     if ((tl==sl ||
-         (tl==sl+1 && jl_is_va_tuple(type)) ||
-         (tl+1==sl && jl_is_va_tuple(sig))) &&
+         (tl==sl+1 && jl_va_tuple_kind(type) == JL_VARARG_UNBOUND) ||
+         (tl+1==sl && jl_va_tuple_kind(sig)  == JL_VARARG_UNBOUND)) &&
         !jl_args_morespecific((jl_value_t*)sig, (jl_value_t*)type)) {
         jl_value_t *isect = jl_type_intersection((jl_value_t*)type,
                                                  (jl_value_t*)sig);
@@ -1163,7 +1164,7 @@ jl_methlist_t *jl_method_list_insert(jl_methlist_t **pml, jl_tupletype_t *type,
             gc_wb(l, l->sig);
             l->tvars = tvars;
             gc_wb(l, l->tvars);
-            l->va = jl_is_va_tuple(type);
+            l->va = jl_va_tuple_kind(type) == JL_VARARG_UNBOUND;
             l->isstaged = isstaged;
             l->invokes = (struct _jl_methtable_t *)jl_nothing;
             l->func = method;
@@ -1192,7 +1193,7 @@ jl_methlist_t *jl_method_list_insert(jl_methlist_t **pml, jl_tupletype_t *type,
     jl_set_typeof(newrec, jl_method_type);
     newrec->sig = type;
     newrec->tvars = tvars;
-    newrec->va = jl_is_va_tuple(type);
+    newrec->va = jl_va_tuple_kind(type) == JL_VARARG_UNBOUND;
     newrec->isstaged = isstaged;
     newrec->func = method;
     newrec->invokes = (struct _jl_methtable_t*)jl_nothing;
@@ -1261,7 +1262,7 @@ static void remove_conflicting(jl_methlist_t **pl, jl_value_t *type)
 static void update_max_args(jl_methtable_t *mt, jl_tupletype_t *type)
 {
     size_t na = jl_nparams(type);
-    if (jl_is_va_tuple(type))
+    if (jl_va_tuple_kind(type) == JL_VARARG_UNBOUND)
         na--;
     if (na > mt->max_args)
         mt->max_args = na;
