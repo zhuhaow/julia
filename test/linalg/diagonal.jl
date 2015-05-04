@@ -62,3 +62,30 @@ for relty in (Float32, Float64, BigFloat), elty in (relty, Complex{relty})
         @test !ishermitian(D3)
     end
 end
+
+#Issue #11120
+let A11120 = Diagonal(Diagonal[Diagonal([1,2]), Diagonal([-3,4im]), Diagonal([-5])])
+    @test svdvals(A11120) == [5:-1:1]
+    @test full(A11120) == [
+     1+0im  0+0im   0+0im  0+0im   0+0im
+     0+0im  2+0im   0+0im  0+0im   0+0im
+     0+0im  0+0im  -3+0im  0+0im   0+0im
+     0+0im  0+0im   0+0im  0+4im   0+0im
+     0+0im  0+0im   0+0im  0+0im  -5+0im]
+    S11120 = svdfact(A11120)
+
+    @test S11120[:U] == [
+      0.0+0.0im    0.0+0.0im  0.0+0.0im      0.5+0.0im  0.0+0.0im
+      0.0+0.0im    0.0+0.0im  0.0+0.0im      0.0+0.0im  2.0+0.0im
+      0.0+0.0im   -0.75+0.0im 0.0+0.0im      0.0+0.0im  0.0+0.0im
+      0.0+0.0im    0.0+0.0im  -4//3im        0.0+0.0im  0.0+0.0im
+     -1.0+0.0im    0.0+0.0im  0.0+0.0im      0.0+0.0im  0.0+0.0im]
+    @test S11120[:S] == [5:-1:1]
+    @test S11120[:Vt] == [
+      0.0+0.0im  0.0+0.0im  0.0+0.0im  0.0+0.0im  1.0+0.0im
+      0.0+0.0im  0.0+0.0im  1.0+0.0im  0.0+0.0im  0.0+0.0im
+      0.0+0.0im  0.0+0.0im  0.0+0.0im  1.0+0.0im  0.0+0.0im
+      1.0+0.0im  0.0+0.0im  0.0+0.0im  0.0+0.0im  0.0+0.0im
+      0.0+0.0im  1.0+0.0im  0.0+0.0im  0.0+0.0im  0.0+0.0im]
+end
+

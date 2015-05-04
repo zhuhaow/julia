@@ -25,7 +25,29 @@ size(D::Diagonal,d::Integer) = d<1 ? throw(ArgumentError("dimension must be ≥ 
 
 fill!(D::Diagonal, x) = (fill!(D.diag, x); D)
 
-full(D::Diagonal) = diagm(D.diag)
+full{T<:Number}(D::Diagonal{T}) = diagm(D.diag)
+function full(D::Diagonal) #Treat the case of possibly block diagonal
+    sizes = map(size, D.diag)
+    for (i, size) in enumerate(sizes)
+        size==() && (sizes[i] = (1, 1))
+        length(size)==1 && (sizes[i] = (size..., 1))
+    end
+
+    m = sum([s[1] for s in sizes])
+    n = sum([s[2] for s in sizes])
+    outeltype = promote_type(map(eltype, D.diag)...)
+    A = zeros(outeltype, m, n)
+    i = j = 1
+    for (k, block) in enumerate(D.diag)
+        mb = sizes[k][1]
+        nb = sizes[k][2]
+        A[i:i+mb-1, j:j+nb-1] = block
+        i += mb
+        j += nb
+    end
+    A
+end
+
 getindex(D::Diagonal, i::Integer, j::Integer) = i == j ? D.diag[i] : zero(eltype(D.diag))
 
 function getindex(D::Diagonal, i::Integer)
@@ -149,18 +171,21 @@ end
 
 #Eigensystem
 eigvals{T<:Number}(D::Diagonal{T}) = D.diag
-eigvals(D::Diagonal) = [eigvals(x) for x in D.diag] #For block matrices, etc.
+eigvals(D::Diagonal) = [map(eigvals, D.diag(x))...;] #For block matrices, etc.
 eigvecs(D::Diagonal) = eye(D)
 eigfact(D::Diagonal) = Eigen(eigvals(D), eigvecs(D))
 
 #Singular system
-svdvals(D::Diagonal) = sort(D.diag, rev = true)
+svdvals(D::Diagonal) = sort!([map(svdvals, D.diag)...;], rev=true)
+
 function svdfact(D::Diagonal, thin=true)
-    S = abs(D.diag)
+    Sm = map(svdvals, D.diag)
+    S = [Sm...]
     piv = sortperm(S, rev=true)
-    U = full(Diagonal(D.diag./S))
-    Up= hcat([U[:,i] for i=1:length(D.diag)][piv]...)
-    V = eye(D)
-    Vp= hcat([V[:,i] for i=1:length(D.diag)][piv]...)
+    U = full(Diagonal(D.diag./map(Diagonal, Sm)))
+    Up= hcat([U[:,i] for i=1:size(U,2)][piv]...)
+    V = eye(eltype(S), length(S))
+    Vp= hcat([V[:,i] for i=1:size(V,2)][piv]...)
     SVD(Up, S[piv], Vp')
 end
+
