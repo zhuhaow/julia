@@ -627,13 +627,19 @@ function eigvals{TA,TB}(A::AbstractMatrix{TA}, B::AbstractMatrix{TB})
 end
 
 # SVD
-immutable SVD{T<:BlasFloat,Tr,M<:AbstractArray} <: Factorization{T}
+immutable SVD{T,Tr,M<:AbstractMatrix} <: Factorization{T}
     U::M
     S::Vector{Tr}
     Vt::M
-    SVD(U::AbstractArray{T}, S::Vector{Tr}, Vt::AbstractArray{T}) = new(U, S, Vt)
+    SVD(U::AbstractMatrix{T}, S::Vector{Tr}, Vt::AbstractMatrix{T}) = new(U, S, Vt)
 end
-SVD{T<:BlasFloat,Tr}(U::AbstractArray{T}, S::Vector{Tr}, Vt::AbstractArray{T}) = SVD{T,Tr,typeof(U)}(U, S, Vt)
+SVD{T,Tr}(U::AbstractMatrix{T}, S::Vector{Tr}, Vt::AbstractMatrix{T}) = SVD{T,Tr,typeof(U)}(U, S, Vt)
+function SVD{T0,T,Tr}(U::AbstractMatrix{T0}, S::Vector{Tr}, Vt::AbstractMatrix{T})
+    R = promote_type(T0, T)
+    Up = convert(AbstractMatrix{R}, U )
+    Vtp= convert(AbstractMatrix{R}, Vt)
+    SVD{R,Tr,typeof(Up)}(Up, S, Vtp)
+end
 
 function svdfact!{T<:BlasFloat}(A::StridedMatrix{T}; thin::Bool=true)
     m,n = size(A)
@@ -651,7 +657,7 @@ end
 svdfact(x::Number; thin::Bool=true) = SVD(x == 0 ? fill(one(x), 1, 1) : fill(x/abs(x), 1, 1), [abs(x)], fill(one(x), 1, 1))
 svdfact(x::Integer; thin::Bool=true) = svdfact(float(x), thin=thin)
 
-function svd(A::Union(Number, AbstractArray); thin::Bool=true)
+function svd(A::Union(Number, AbstractMatrix); thin::Bool=true)
     F = svdfact(A, thin=thin)
     F.U, F.S, F.Vt'
 end
