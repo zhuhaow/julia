@@ -127,6 +127,8 @@ methods(f::ANY,t::ANY) = methods(call, tt_cons(isa(f,Type) ? Type{f} : typeof(f)
 function _methods(f::ANY,t::ANY,lim)
     if isa(t,Type)
         _methods(f, Any[t.parameters...], length(t.parameters), lim, [])
+    elseif isa(t,TypeVar)
+        _methods(f, Any[t.ub], 1, lim, [])
     else
         _methods(f, Any[t...], length(t), lim, [])
     end
