@@ -2212,6 +2212,13 @@ static jl_value_t *inst_datatype(jl_datatype_t *dt, jl_svec_t *p, jl_value_t **i
 
 static jl_tupletype_t *jl_apply_tuple_type_v_(jl_value_t **p, size_t np, jl_svec_t *params)
 {
+    if (np == 1 && jl_is_vararg_type(p[0])) {
+        jl_datatype_t *va = (jl_datatype_t*)p[0];
+        if (jl_is_long(jl_tparam1(va))) {
+            size_t nt = jl_unbox_long(jl_tparam1(va));
+            return (jl_tupletype_t*)jl_tupletype_fill(nt, jl_tparam0(va));
+        }
+    }
     int isabstract = 0, cacheable = 1;
     for(size_t i=0; i < np; i++) {
         if (!jl_is_leaf_type(p[i]))
