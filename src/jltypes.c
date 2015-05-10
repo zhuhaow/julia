@@ -3304,7 +3304,6 @@ static int jl_subtype_le(jl_value_t *a, jl_value_t *b, int ta, int invariant)
     else
         newb = b;
     int retnew = jl_subtype_le_new(newa, newb, ta, invariant);
-    /*
     if (retnew != retold) {
         if (warnonce_subtype(ta, invariant, jl_object_id(a), jl_object_id(b))) {
             jl_printf(JL_STDOUT, "Disagree jl_subtype_le with retnew = %d, retold = %d (ta = %d, invariant = %d):\n", retnew, retold, ta, invariant);
@@ -3314,10 +3313,8 @@ static int jl_subtype_le(jl_value_t *a, jl_value_t *b, int ta, int invariant)
             jlt_(b);
         }
     }
-    */
     JL_GC_POP();
     return retnew;
-    //return retold;
 }
 
 int jl_subtype(jl_value_t *a, jl_value_t *b, int ta)
