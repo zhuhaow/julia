@@ -1005,6 +1005,11 @@ DLLEXPORT ssize_t jl_unbox_gensym(jl_value_t *v);
 #define jl_long_type     jl_int32_type
 #endif
 
+// Each tuple can exist in one of 4 Vararg states:
+//   NONE: no vararg                            Tuple{Int,Float32}
+//   INT: vararg with integer length            Tuple{Int,Vararg{Float32,2}}
+//   BOUND: vararg with bound TypeVar length    Tuple{Int,Vararg{Float32,N}}
+//   UNBOUND: vararg with unbound length        Tuple{Int,Vararg{Float32}}
 typedef enum {
     JL_VARARG_NONE    = 0,
     JL_VARARG_INT     = 1,
