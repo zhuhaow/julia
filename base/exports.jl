@@ -73,6 +73,7 @@ export
     MathConst,
     Matrix,
     MergeSort,
+    NTuple,
     Nullable,
     ObjectIdDict,
     OrdinalRange,

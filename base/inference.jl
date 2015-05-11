@@ -260,9 +260,6 @@ const getfield_tfunc = function (A, s0, name)
     if !isa(s,DataType)
         return Any, false
     end
-    if is(s.name,NTuple.name)
-        return (name == Symbol ? Bottom : s.parameters[2]), true
-    end
     if s.abstract
         return Any, false
     end
