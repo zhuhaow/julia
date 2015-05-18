@@ -32,6 +32,10 @@ New language features
   * The syntax `function foo end` can be used to introduce a generic function without
     yet adding any methods ([#8283]).
 
+  * Varargs functions like `foo{T}(x::T...)` may now restrict the number
+    of such arguments using `foo{T,N}(x::Vararg{T,N})` ([#11242]).
+
+
 Language changes
 ----------------
 
@@ -113,6 +117,9 @@ Language changes
   * A custom triple-quoted string like `x"""..."""` no longer invokes an `x_mstr`
     macro. Instead, the string is first unindented and then `x_str` is invoked,
     as if the string had been single-quoted ([#10228]).
+
+  * The built-in `NTuple` type has been removed; `NTuple{N,T}` is now
+    implemented internally as `Tuple{Vararg{T,N}}` ([#11242]).
 
 Command line option changes
 ---------------------------
@@ -1433,8 +1440,12 @@ Too numerous to mention.
 [#10994]: https://github.com/JuliaLang/julia/issues/10994
 [#11105]: https://github.com/JuliaLang/julia/issues/11105
 [#11145]: https://github.com/JuliaLang/julia/issues/11145
+<<<<<<< HEAD
 [#11171]: https://github.com/JuliaLang/julia/issues/11171
 [#11241]: https://github.com/JuliaLang/julia/issues/11241
 [#11347]: https://github.com/JuliaLang/julia/issues/11347
 [#11379]: https://github.com/JuliaLang/julia/issues/11379
 [#11067]: https://github.com/JuliaLang/julia/issues/11067
+=======
+[#11242]: https://github.com/JuliaLang/julia/issues/11242
+>>>>>>> 8ff9edd... Add docs and NEWS on Vararg{T,N}
