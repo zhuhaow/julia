@@ -64,6 +64,7 @@ object_id(x::ANY) = ccall(:jl_object_id, UInt, (Any,), x)
 isimmutable(x::ANY) = (isa(x,Tuple) || !typeof(x).mutable)
 isstructtype(t::DataType) = nfields(t) != 0 || (t.size==0 && !t.abstract)
 isstructtype(x) = false
+isbits(t::UnionType) = false
 isbits(t::DataType) = !t.mutable & t.pointerfree & isleaftype(t)
 isbits(t::Type) = false
 isbits(x) = isbits(typeof(x))
