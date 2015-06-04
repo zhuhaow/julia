@@ -169,6 +169,8 @@ macro goto(name::Symbol)
     Expr(:symbolicgoto, name)
 end
 
+typealias NTuple{N,T} Tuple{Vararg{T,N}}
+
 call{T,N}(::Type{Array{T}}, d::NTuple{N,Int}) =
     ccall(:jl_new_array, Array{T,N}, (Any,Any), Array{T,N}, d)
 call{T}(::Type{Array{T}}, d::Integer...) = Array{T}(convert(Tuple{Vararg{Int}}, d))

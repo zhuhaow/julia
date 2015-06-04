@@ -1440,12 +1440,9 @@ Too numerous to mention.
 [#10994]: https://github.com/JuliaLang/julia/issues/10994
 [#11105]: https://github.com/JuliaLang/julia/issues/11105
 [#11145]: https://github.com/JuliaLang/julia/issues/11145
-<<<<<<< HEAD
 [#11171]: https://github.com/JuliaLang/julia/issues/11171
 [#11241]: https://github.com/JuliaLang/julia/issues/11241
 [#11347]: https://github.com/JuliaLang/julia/issues/11347
 [#11379]: https://github.com/JuliaLang/julia/issues/11379
 [#11067]: https://github.com/JuliaLang/julia/issues/11067
-=======
 [#11242]: https://github.com/JuliaLang/julia/issues/11242
->>>>>>> 8ff9edd... Add docs and NEWS on Vararg{T,N}
