@@ -1826,6 +1826,7 @@ double clock_now(void);
 extern jl_module_t *jl_old_base_module;
 extern jl_array_t *typeToTypeId;
 extern jl_array_t *jl_module_init_order;
+extern jl_array_t *jl_cached_funcs;
 
 static int inc_count = 0;
 static int quick_count = 0;
@@ -1848,6 +1849,8 @@ static void pre_mark(void)
     gc_push_root(typeToTypeId, 0);
     if (jl_module_init_order != NULL)
         gc_push_root(jl_module_init_order, 0);
+    if (jl_cached_funcs != NULL)
+        gc_push_root(jl_cached_funcs, 0);
 
     size_t i;
 

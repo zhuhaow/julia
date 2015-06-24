@@ -1581,7 +1581,21 @@ static void show_call(jl_value_t *F, jl_value_t **args, uint32_t nargs)
 }
 #endif
 
-JL_CALLABLE(jl_apply_generic)
+// Keep cached functions alive
+jl_array_t *jl_cached_funcs = NULL;
+
+static void
+cached_funcs_pushroot(jl_value_t *f)
+{
+    if (__unlikely(!jl_cached_funcs)) {
+        jl_cached_funcs = jl_alloc_cell_1d(0);
+    }
+    jl_cell_1d_push(jl_cached_funcs, f);
+}
+
+static jl_function_t*
+jl_specialize_generic(jl_value_t *F, jl_value_t **args, uint32_t nargs,
+                      int *specialized)
 {
     jl_methtable_t *mt = jl_gf_mtable(F);
 #ifdef JL_GF_PROFILE
@@ -1619,10 +1633,12 @@ JL_CALLABLE(jl_apply_generic)
                     li->unspecialized->env = NULL;
                 jl_gc_wb(li, li->unspecialized);
             }
-            return jl_apply_unspecialized(mfunc, args, nargs);
+            *specialized = 0;
+            return mfunc;
         }
         assert(!mfunc->linfo || !mfunc->linfo->inInference);
-        return jl_apply(mfunc, args, nargs);
+        *specialized = 1;
+        return mfunc;
     }
 
     // cache miss case
@@ -1646,7 +1662,154 @@ JL_CALLABLE(jl_apply_generic)
         jl_printf(JL_STDOUT, " at %s:%d\n", mfunc->linfo->file->name, mfunc->linfo->line);
 #endif
     assert(!mfunc->linfo || !mfunc->linfo->inInference);
-    jl_value_t *res = jl_apply(mfunc, args, nargs);
+    *specialized = 1;
+    JL_GC_POP();
+    return mfunc;
+}
+
+typedef struct {
+    jl_value_t *func;
+    jl_value_t *types[0];
+} jl_callsite_cache_key_t;
+
+typedef struct {
+    jl_function_t *mfunc;
+    jl_callsite_cache_key_t key;
+} jl_callsite_cache_item_t;
+
+typedef struct {
+    size_t len;
+    jl_callsite_cache_item_t items[0];
+} jl_callsite_cache_head_t;
+
+#define cache_types_offset                                      \
+    ((size_t)(((jl_callsite_cache_item_t*)NULL)->key.types))
+
+static inline jl_callsite_cache_item_t*
+callsite_cache_item(jl_callsite_cache_head_t *cache, size_t i,
+                    uint32_t item_size)
+{
+    return (jl_callsite_cache_item_t*)(((char*)cache->items) + i * item_size);
+}
+
+static int
+callsite_cache_cmp(jl_callsite_cache_key_t *key1,
+                   jl_callsite_cache_key_t *key2, uint32_t nargs)
+{
+    if (key1->func != key2->func) {
+        return 0;
+    }
+    for (uint32_t i = 0;i < nargs;i++) {
+        if (key1->types[i] != key2->types[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static jl_callsite_cache_item_t*
+callsite_cache_find(jl_callsite_cache_head_t *cache,
+                    jl_callsite_cache_key_t *key, uint32_t item_size,
+                    uint32_t nargs)
+{
+    for (size_t i = 0;i < cache->len;i++) {
+        jl_callsite_cache_item_t *item =
+            callsite_cache_item(cache, i, item_size);
+        if (callsite_cache_cmp(&item->key, key, nargs)) {
+            return item;
+        }
+    }
+    return NULL;
+}
+
+static void
+callsite_cache_push(jl_callsite_cache_head_t **cache_p,
+                    jl_callsite_cache_key_t *key, uint32_t item_size,
+                    jl_function_t *mfunc)
+{
+    cached_funcs_pushroot((jl_value_t*)mfunc);
+    cached_funcs_pushroot(key->func);
+    jl_callsite_cache_head_t *cache = *cache_p;
+    jl_callsite_cache_item_t *target;
+    if (!cache) {
+        cache = malloc(offsetof(jl_callsite_cache_head_t, items) + item_size);
+        cache->len = 0;
+        target = cache->items;
+    } else {
+        cache = realloc(cache, offsetof(jl_callsite_cache_head_t, items) +
+                        item_size * (cache->len + 1));
+        target = callsite_cache_item(cache, cache->len, item_size);
+    }
+    cache->len++;
+    target->mfunc = mfunc;
+    memcpy(&target->key, key,
+           item_size - offsetof(jl_callsite_cache_item_t, key));
+    *cache_p = cache;
+}
+
+#define max_cache_length 4
+
+DLLEXPORT jl_value_t*
+jl_apply_generic_cached(jl_value_t *F, jl_value_t **args, uint32_t nargs,
+                        void *_cache_p)
+{
+    jl_callsite_cache_head_t **cache_p = _cache_p;
+    jl_callsite_cache_head_t *cache = *cache_p;
+    if (nargs > 64 || (cache && cache->len > max_cache_length)) {
+        return jl_apply_generic(F, args, nargs);
+    }
+    uint32_t item_size = cache_types_offset + nargs * sizeof(void*);
+    jl_callsite_cache_key_t *key =
+        (jl_callsite_cache_key_t*)alloca(
+            item_size - offsetof(jl_callsite_cache_item_t, key));
+    key->func = F;
+    for (size_t i = 0;i < nargs;i++) {
+        key->types[i] = jl_typeof(args[i]);
+    }
+    if (cache) {
+        jl_callsite_cache_item_t *cache_hit =
+            callsite_cache_find(cache, key, item_size, nargs);
+        if (cache_hit) {
+            return jl_apply(cache_hit->mfunc, args, nargs);
+        }
+    }
+    for (size_t i = 0;i < nargs;i++) {
+        if (jl_is_type(args[i])) {
+            // Hack! disable callsite cache if there's a parameter that is a
+            // type
+            if (!cache) {
+                cache = (jl_callsite_cache_head_t*)
+                    malloc(sizeof(jl_callsite_cache_head_t));
+            }
+            cache->len = max_cache_length + 1;
+            return jl_apply_generic(F, args, nargs);
+        }
+    }
+    int specialized = 0;
+    jl_function_t *mfunc = jl_specialize_generic(F, args, nargs, &specialized);
+    JL_GC_PUSH1(&mfunc);
+    jl_value_t *res;
+    if (specialized) {
+        callsite_cache_push(cache_p, key, item_size, mfunc);
+        res = jl_apply(mfunc, args, nargs);
+    } else {
+        res = jl_apply_unspecialized(mfunc, args, nargs);
+    }
+    JL_GC_POP();
+    return res;
+}
+
+JL_CALLABLE(jl_apply_generic)
+{
+    int specialized = 0;
+    jl_function_t *mfunc = jl_specialize_generic(F, args, nargs, &specialized);
+    JL_GC_PUSH1(&mfunc);
+    jl_value_t *res;
+    if (specialized) {
+        res = jl_apply(mfunc, args, nargs);
+    } else {
+        res = jl_apply_unspecialized(mfunc, args, nargs);
+    }
     JL_GC_POP();
     return res;
 }

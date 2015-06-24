@@ -300,6 +300,7 @@ static Function *jlcopyast_func;
 static Function *jltuple_func;
 static Function *jlnsvec_func;
 static Function *jlapplygeneric_func;
+static Function *jlapplycached_func;
 static Function *jlgetfield_func;
 static Function *jlbox_func;
 static Function *jlclosure_func;
@@ -2564,13 +2565,34 @@ static Value *emit_jlcall(Value *theFptr, Value *theF, int argStart,
         myargs = emit_temp_slot(argStart, ctx);
     else
         myargs = Constant::getNullValue(jl_ppvalue_llvmt);
+    Value *result;
+    if (theFptr == jlapplygeneric_func && nargs <= 64) {
+        std::stringstream gvname;
+        gvname << "jl_callsite_cache#" << globalUnique++;
+        Value *cache =
+            new GlobalVariable(*jl_Module, T_pint8,
+                               false, GlobalVariable::InternalLinkage,
+                               ConstantPointerNull::get((PointerType*)T_pint8),
+                               gvname.str());
+        cache = builder.CreateBitCast(cache, T_pint8);
 #ifdef LLVM37
-    Value *result = builder.CreateCall(prepare_call(theFptr), {theF, myargs,
-                                        ConstantInt::get(T_int32,nargs)});
+        result = builder.CreateCall(
+            prepare_call(jlapplycached_func), {theF, myargs,
+                    ConstantInt::get(T_int32, nargs), cache});
 #else
-    Value *result = builder.CreateCall3(prepare_call(theFptr), theF, myargs,
-                                        ConstantInt::get(T_int32,nargs));
+        result = builder.CreateCall4(prepare_call(jlapplycached_func), theF,
+                                     myargs, ConstantInt::get(T_int32, nargs),
+                                     cache);
 #endif
+    } else {
+#ifdef LLVM37
+        result = builder.CreateCall(prepare_call(theFptr), {theF, myargs,
+                                    ConstantInt::get(T_int32,nargs)});
+#else
+        result = builder.CreateCall3(prepare_call(theFptr), theF, myargs,
+                                     ConstantInt::get(T_int32,nargs));
+#endif
+    }
     ctx->gc.argDepth = argStart; // clear the args from the gcstack
     return result;
 }
@@ -5188,6 +5210,19 @@ static void init_julia_llvm_env(Module *m)
     jltuple_func = builtin_func_map[jl_f_tuple];
     jlgetfield_func = builtin_func_map[jl_f_get_field];
     jlapplygeneric_func = jlcall_func_to_llvm("jl_apply_generic", (void*)&jl_apply_generic, m);
+
+    std::vector<Type *> applycache_args(0);
+    applycache_args.push_back(jl_pvalue_llvmt);
+    applycache_args.push_back(jl_ppvalue_llvmt);
+    applycache_args.push_back(T_int32);
+    applycache_args.push_back(T_pint8);
+    jlapplycached_func =
+        Function::Create(FunctionType::get(jl_pvalue_llvmt,
+                                           applycache_args, false),
+                         Function::ExternalLinkage,
+                         "jl_apply_generic_cached", m);
+    add_named_global(jlapplycached_func,
+                     (void*)&jl_apply_generic_cached);
 
     queuerootfun = Function::Create(FunctionType::get(T_void, args_1ptr, false),
                                     Function::ExternalLinkage,

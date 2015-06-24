@@ -187,6 +187,9 @@ DLLEXPORT void jl_atexit_hook();
 extern DLLEXPORT jl_value_t *jl_segv_exception;
 #endif
 
+jl_value_t *jl_apply_generic_cached(jl_value_t *F, jl_value_t **args,
+                                    uint32_t nargs, void *cache_p);
+
 #ifdef __cplusplus
 }
 #endif
