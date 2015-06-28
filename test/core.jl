@@ -3051,14 +3051,11 @@ end
 immutable Foo11874
    x::Int
 end
-
 function bar11874(x)
    y::Foo11874
    y=x
 end
-
 Base.convert(::Type{Foo11874},x::Int) = float(x)
-
 @test_throws TypeError bar11874(1)
 
 # issue #9233
@@ -3129,3 +3126,10 @@ f12063{T}(tt, g, p, c, b, v, cu::T, d::AbstractArray{T, 2}, ve) = 1
 f12063(args...) = 2
 g12063() = f12063(0, 0, 0, 0, 0, 0, 0.0, spzeros(0,0), Int[])
 @test g12063() == 1
+
+module TestCostStructCreate
+const x = (1,2)
+const y = (x,(3,4))
+f() = (x,y,(5,6))
+@test f() == ((1,2),((1,2),(3,4)),(5,6))
+end
