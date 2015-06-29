@@ -61,7 +61,7 @@ b = unsafe_load(ccall((:cfptest, "./libccalltest"), Ptr{Complex64}, (Ptr{Complex
 
 # Tests for native Julia data types
 @test_throws MethodError ccall((:cptest, "./libccalltest"), Ptr{Complex{Int}}, (Ptr{Complex{Int}},), cf32)
-@test_throws ErrorException ccall((:cptest, "./libccalltest"), Ptr{Complex{Int}}, (Complex{Int},), &cf32) #compile-time error
+@test_throws MethodError ccall((:cptest, "./libccalltest"), Ptr{Complex{Int}}, (Complex{Int},), &cf32)
 
 # Tests for various sized data types (ByVal)
 type Struct1
