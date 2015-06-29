@@ -3127,9 +3127,9 @@ f12063(args...) = 2
 g12063() = f12063(0, 0, 0, 0, 0, 0, 0.0, spzeros(0,0), Int[])
 @test g12063() == 1
 
-module TestCostStructCreate
+module TestRecursiveConstGlobalStructCtor
 const x = (1,2)
 const y = (x,(3,4))
 f() = (x,y,(5,6))
-@test f() == ((1,2),((1,2),(3,4)),(5,6))
 end
+@test TestRecursiveConstGlobalStructCtor.f() == ((1,2),((1,2),(3,4)),(5,6))
