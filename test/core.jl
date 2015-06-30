@@ -3133,3 +3133,8 @@ const y = (x,(3,4))
 f() = (x,y,(5,6))
 end
 @test TestRecursiveConstGlobalStructCtor.f() == ((1,2),((1,2),(3,4)),(5,6))
+
+const const_array_int1 = Array{Int}
+const const_array_int2 = Array{Int}
+test_eq_array_int() = is(const_array_int1, const_array_int2)
+@test test_eq_array_int()
