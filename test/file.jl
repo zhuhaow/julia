@@ -875,6 +875,17 @@ rm(dir)
 @unix_only @test !ispath(file)
 @unix_only @test !ispath(dir)
 
+unsafe_store!(cglobal(:jl_segv_print_bt, Cint), Cint(0))
+file = tempname()
+s = open(file, "w") do f
+    write(f, "Hello World\n")
+end
+s = open(file, "r")
+m = Mmap.mmap(s)
+# tries to setindex! on read-only array
+@test_throws ReadOnlyMemoryError m[5] = UInt8('x')
+m=nothing; gc()
+
 # issue #9687
 let n = tempname()
     w = open(n, "a")

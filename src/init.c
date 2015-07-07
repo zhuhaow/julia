@@ -278,19 +278,25 @@ void sigdie_handler(int sig, siginfo_t *info, void *context)
 }
 #endif
 
+DLLEXPORT int jl_segv_print_bt = 1;
 #if defined(__linux__) || defined(__FreeBSD__)
 extern int in_jl_;
 void segv_handler(int sig, siginfo_t *info, void *context)
 {
     sigset_t sset;
 
+    if (jl_segv_print_bt) {
+        bt_size = rec_backtrace_ctx(bt_data, MAX_BT_SIZE, (ucontext_t*)context);
+    }
     if (sig == SIGSEGV && (in_jl_ || is_addr_on_stack(info->si_addr))) { // stack overflow
+        jl_safe_printf("\nStack overflow\n");
         sigemptyset(&sset);
         sigaddset(&sset, SIGSEGV);
         sigprocmask(SIG_UNBLOCK, &sset, NULL);
         jl_throw(jl_stackovf_exception);
     }
     else if (info->si_code == SEGV_ACCERR) {  // writing to read-only memory (e.g., mmap)
+        jl_safe_printf("\nReadonly Memory\n");
         sigemptyset(&sset);
         sigaddset(&sset, SIGSEGV);
         sigprocmask(SIG_UNBLOCK, &sset, NULL);

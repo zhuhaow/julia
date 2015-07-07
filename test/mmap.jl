@@ -89,6 +89,7 @@ m = Mmap.mmap(file, Vector{UInt8}, 1, sz+1)
 @test m[1] == 0x00
 m=nothing; gc()
 
+unsafe_store!(cglobal(:jl_segv_print_bt, Cint), Cint(1))
 s = open(file, "r")
 m = Mmap.mmap(s)
 # tries to setindex! on read-only array
