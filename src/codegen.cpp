@@ -821,7 +821,7 @@ static void jl_setup_module(Module *m, bool add)
 #endif
 #ifdef LLVM37
     if (jl_ExecutionEngine) {
-        m->setDataLayout(jl_ExecutionEngine->getDataLayout()->getStringRepresentation());
+        m->setDataLayout(jl_ExecutionEngine->getDataLayout().getStringRepresentation());
         m->setTargetTriple(jl_TargetMachine->getTargetTriple().str());
     }
 #elif LLVM36
@@ -2009,8 +2009,8 @@ static Value *emit_bits_compare(const jl_cgval_t &arg1, const jl_cgval_t &arg2, 
             for(unsigned i=0; i < l; i++) {
                 jl_value_t *fldty = jl_svecref(types, i);
                 Value *subAns, *fld1, *fld2;
-                fld1 = builder.CreateConstGEP2_32(varg1, 0, i);
-                fld2 = builder.CreateConstGEP2_32(varg2, 0, i);
+                fld1 = builder.CreateConstGEP2_32(LLVM37_param(at) varg1, 0, i);
+                fld2 = builder.CreateConstGEP2_32(LLVM37_param(at) varg2, 0, i);
                 if (type_is_ghost(fld1->getType()))
                     continue;
                 subAns = emit_bits_compare(mark_julia_slot(fld1, fldty), mark_julia_slot(fld2, fldty), ctx);
@@ -5738,8 +5738,8 @@ extern "C" void jl_init_codegen(void)
     mbuilder = new MDBuilder(getGlobalContext());
 
 #ifdef LLVM37
-    m->setDataLayout(jl_ExecutionEngine->getDataLayout()->getStringRepresentation());
-    engine_module->setDataLayout(jl_ExecutionEngine->getDataLayout()->getStringRepresentation());
+    m->setDataLayout(jl_ExecutionEngine->getDataLayout().getStringRepresentation());
+    engine_module->setDataLayout(jl_ExecutionEngine->getDataLayout().getStringRepresentation());
     m->setTargetTriple(jl_TargetMachine->getTargetTriple().str());
     engine_module->setTargetTriple(jl_TargetMachine->getTargetTriple().str());
 #elif LLVM36
