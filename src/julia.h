@@ -486,7 +486,7 @@ extern jl_sym_t *abstracttype_sym; extern jl_sym_t *bitstype_sym;
 extern jl_sym_t *compositetype_sym; extern jl_sym_t *type_goto_sym;
 extern jl_sym_t *global_sym;  extern jl_sym_t *tuple_sym;
 extern jl_sym_t *boundscheck_sym; extern jl_sym_t *copyast_sym;
-extern jl_sym_t *fastmath_sym;
+extern jl_sym_t *fastmath_sym; extern jl_sym_t *stknew_sym;
 extern jl_sym_t *simdloop_sym; extern jl_sym_t *meta_sym;
 extern jl_sym_t *arrow_sym; extern jl_sym_t *inert_sym;
 
@@ -580,13 +580,13 @@ void gc_setmark_buf(void *buf, int);
 
 static inline void jl_gc_wb_binding(jl_binding_t *bnd, void *val) // val isa jl_value_t*
 {
-    if (__unlikely((*((uintptr_t*)bnd-1) & 1) == 1 && (*(uintptr_t*)jl_astaggedvalue(val) & 1) == 0))
+    if (__unlikely((*((uintptr_t*)bnd-1) & 3) == 1 && (*(uintptr_t*)jl_astaggedvalue(val) & 1) == 0))
         gc_queue_binding(bnd);
 }
 
 static inline void jl_gc_wb(void *parent, void *ptr) // parent and ptr isa jl_value_t*
 {
-    if (__unlikely((*((uintptr_t*)jl_astaggedvalue(parent)) & 1) == 1 &&
+    if (__unlikely((*((uintptr_t*)jl_astaggedvalue(parent)) & 3) == 1 &&
                    (*((uintptr_t*)jl_astaggedvalue(ptr)) & 1) == 0))
         jl_gc_queue_root((jl_value_t*)parent);
 }
@@ -602,7 +602,7 @@ static inline void jl_gc_wb_buf(void *parent, void *bufptr) // parent isa jl_val
 static inline void jl_gc_wb_back(void *ptr) // ptr isa jl_value_t*
 {
     // if ptr is marked
-    if(__unlikely((*((uintptr_t*)jl_astaggedvalue(ptr)) & 1) == 1)) {
+    if(__unlikely((*((uintptr_t*)jl_astaggedvalue(ptr)) & 3) == 1)) {
         jl_gc_queue_root((jl_value_t*)ptr);
     }
 }

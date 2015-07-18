@@ -1790,7 +1790,7 @@ static void emit_write_barrier(jl_codectx_t* ctx, Value *parent, Value *ptr)
 {
     Value* parenttag = builder.CreateBitCast(emit_typeptr_addr(parent), T_psize);
     Value* parent_type = builder.CreateLoad(parenttag);
-    Value* parent_mark_bits = builder.CreateAnd(parent_type, 1);
+    Value* parent_mark_bits = builder.CreateAnd(parent_type, 3);
 
     // the branch hint does not seem to make it to the generated code
     //builder.CreateCall(expect_func, {parent_marked, ConstantInt::get(T_int1, 0)});
@@ -1857,7 +1857,7 @@ static void emit_setfield(jl_datatype_t *sty, const jl_cgval_t &strct, size_t id
     }
 }
 
-static jl_cgval_t emit_new_struct(jl_value_t *ty, size_t nargs, jl_value_t **args, jl_codectx_t *ctx)
+static jl_cgval_t emit_new_struct(jl_value_t *ty, size_t nargs, jl_value_t **args, jl_codectx_t *ctx, bool on_stack = false)
 {
     assert(jl_is_datatype(ty));
     assert(jl_is_leaf_type(ty));
@@ -1913,10 +1913,18 @@ static jl_cgval_t emit_new_struct(jl_value_t *ty, size_t nargs, jl_value_t **arg
             if (might_need_root(args[1]) || !fval_info.isboxed)
                 make_gcroot(f1, ctx);
         }
-        Value *strct = emit_allocobj(sty->size);
+        Value *strct;
+        Value *tag = literal_pointer_val((jl_value_t*)ty);
+        if (on_stack) {
+            strct = builder.CreateConstGEP1_32(builder.CreateBitCast(emit_static_alloca(T_int8, sty->size + sizeof(void*), ctx), jl_pvalue_llvmt), 1);
+            // set the gc bits as marked & young
+            tag = builder.CreateIntToPtr(builder.CreateOr(builder.CreatePtrToInt(tag, T_size), 3), jl_pvalue_llvmt);
+        }
+        else {
+            strct = emit_allocobj(sty->size);
+        }
         jl_cgval_t strctinfo = mark_julia_type(strct, ty);
-        builder.CreateStore(literal_pointer_val((jl_value_t*)ty),
-                            emit_typeptr_addr(strct));
+        builder.CreateStore(tag, emit_typeptr_addr(strct));
         if (f1) {
             jl_cgval_t f1info = mark_julia_type(f1, jl_any_type);
             if (!jl_subtype(expr_type(args[1],ctx), jl_field_type(sty,0), 0))

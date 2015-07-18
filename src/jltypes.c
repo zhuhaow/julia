@@ -3534,6 +3534,7 @@ void jl_init_types(void)
     dot_sym = jl_symbol(".");
     boundscheck_sym = jl_symbol("boundscheck");
     fastmath_sym = jl_symbol("fastmath");
+    stknew_sym = jl_symbol("stknew");
     newvar_sym = jl_symbol("newvar");
     copyast_sym = jl_symbol("copyast");
     simdloop_sym = jl_symbol("simdloop");

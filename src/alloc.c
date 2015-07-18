@@ -99,7 +99,7 @@ jl_sym_t *compositetype_sym; jl_sym_t *type_goto_sym;
 jl_sym_t *global_sym; jl_sym_t *tuple_sym;
 jl_sym_t *dot_sym;    jl_sym_t *newvar_sym;
 jl_sym_t *boundscheck_sym; jl_sym_t *copyast_sym;
-jl_sym_t *fastmath_sym;
+jl_sym_t *fastmath_sym; jl_sym_t *stknew_sym;
 jl_sym_t *simdloop_sym; jl_sym_t *meta_sym;
 jl_sym_t *arrow_sym;  jl_sym_t *inert_sym;
 jl_sym_t *vararg_sym;
