@@ -382,11 +382,11 @@ static char *abspath(const char *in)
             if (uv_cwd(path, &path_size)) {
                 jl_error("fatal error: unexpected error while retrieving current working directory");
             }
-            if (path_size + len + 1 >= PATH_MAX) {
+            if (path_size + len + 2 >= PATH_MAX) {
                 jl_error("fatal error: current working directory path too long");
             }
-            path[path_size-1] = PATHSEPSTRING[0];
-            memcpy(path+path_size, in, len+1);
+            path[path_size] = PATHSEPSTRING[0];
+            memcpy(path + path_size + 1, in, len+1);
             out = strdup(path);
             free(path);
         }
@@ -421,7 +421,9 @@ static void jl_resolve_sysimg_location(JL_IMAGE_SEARCH rel)
     if (path_size >= PATH_MAX) {
         jl_error("fatal error: jl_options.julia_bin path too long");
     }
-    jl_options.julia_bin = strdup(free_path);
+    jl_options.julia_bin = (char*)malloc(path_size+1);
+    memcpy((char*)jl_options.julia_bin, free_path, path_size);
+    ((char*)jl_options.julia_bin)[path_size] = '\0';
     if (!jl_options.julia_home) {
         jl_options.julia_home = getenv("JULIA_HOME");
         if (!jl_options.julia_home) {

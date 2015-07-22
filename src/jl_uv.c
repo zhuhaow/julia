@@ -162,7 +162,11 @@ DLLEXPORT void jl_close_uv(uv_handle_t *handle)
     }
 
     if (handle->type == UV_NAMED_PIPE || handle->type == UV_TCP) {
+#ifdef _OS_WINDOWS_
+        if (((uv_stream_t*)handle)->stream.conn.shutdown_req) {
+#else
         if (((uv_stream_t*)handle)->shutdown_req) {
+#endif
             // don't close the stream while attempting a graceful shutdown
             return;
         }
@@ -740,8 +744,9 @@ DLLEXPORT int jl_ispty(uv_pipe_t *pipe)
     if (pipe->type != UV_NAMED_PIPE) return 0;
     size_t len = 0;
     if (uv_pipe_getsockname(pipe, NULL, &len) != UV_ENOBUFS) return 0;
-    char *name = (char *) alloca(len);
+    char *name = (char *) alloca(len+1);
     if (uv_pipe_getsockname(pipe, name, &len)) return 0;
+    name[len] = '\0';
     // return true if name matches regex:
     // ^\\\\?\\pipe\\(msys|cygwin)-[0-9a-z]{16}-[pt]ty[1-9][0-9]*-
     //jl_printf(JL_STDERR,"pipe_name: %s\n", name);

@@ -200,8 +200,8 @@ void fl_raise(value_t e)
 static value_t make_error_msg(char *format, va_list args)
 {
     char msgbuf[512];
-    vsnprintf(msgbuf, sizeof(msgbuf), format, args);
-    return string_from_cstr(msgbuf);
+    size_t len = vsnprintf(msgbuf, sizeof(msgbuf), format, args);
+    return string_from_cstrn(msgbuf, len);
 }
 
 void lerrorf(value_t e, char *format, ...)
