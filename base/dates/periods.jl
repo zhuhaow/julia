@@ -6,7 +6,7 @@ value(x::Period) = x.value
 # The default constructors for Periods work well in almost all cases
 # P(x) = new((convert(Int64,x))
 # The following definitions are for Period-specific safety
-for p in (:Year,:Month,:Week,:Day,:Hour,:Minute,:Second,:Millisecond)
+for p in (:Year,:Month,:Week,:Day,:Hour,:Minute,:Second,:Millisecond,:Microsecond,:Nanosecond)
     # Convenience method for show()
     @eval _units(x::$p) = $(" " * lowercase(string(p))) * (abs(value(x)) == 1 ? "" : "s")
     # periodisless
@@ -93,15 +93,28 @@ periodisless(::Period,::Hour)        = false
 periodisless(::Minute,::Hour)        = true
 periodisless(::Second,::Hour)        = true
 periodisless(::Millisecond,::Hour)   = true
+periodisless(::Microsecond,::Hour)   = true
+periodisless(::Nanosecond,::Hour)    = true
 periodisless(::Period,::Minute)      = false
 periodisless(::Second,::Minute)      = true
 periodisless(::Millisecond,::Minute) = true
+periodisless(::Microsecond,::Minute) = true
+periodisless(::Nanosecond,::Minute)  = true
 periodisless(::Period,::Second)      = false
 periodisless(::Millisecond,::Second) = true
-periodisless(::Period,::Millisecond) = false
+periodisless(::Microsecond,::Second) = true
+periodisless(::Nanosecond,::Second)  = true
+periodisless(::Microsecond,::Millisecond) = true
+periodisless(::Nanosecond,::Millisecond)  = true
+periodisless(::Period,::Millisecond)      = false
+periodisless(::Nanosecond,::Microsecond)  = true
+periodisless(::Period,::Millisecond)      = false
+periodisless(::Period,::Nanosecond)       = false
 
 # return (next coarser period, conversion factor):
 coarserperiod{P<:Period}(::Type{P}) = (P,1)
+coarserperiod(::Type{Nanosecond}) = (Microsecond,1000)
+coarserperiod(::Type{Microsecond}) = (Millisecond,1000)
 coarserperiod(::Type{Millisecond}) = (Second,1000)
 coarserperiod(::Type{Second}) = (Minute,60)
 coarserperiod(::Type{Minute}) = (Hour,60)
@@ -247,7 +260,7 @@ end
 
 # Fixed-value Periods (periods corresponding to a well-defined time interval,
 # as opposed to variable calendar intervals like Year).
-typealias FixedPeriod Union{Week,Day,Hour,Minute,Second,Millisecond}
+typealias FixedPeriod Union{Week,Day,Hour,Minute,Second,Millisecond,Microsecond,Nanosecond}
 
 # like div but throw an error if remainder is nonzero
 function divexact(x,y)
@@ -257,7 +270,7 @@ function divexact(x,y)
 end
 
 # FixedPeriod conversions and promotion rules
-const fixedperiod_conversions = [(Week,7),(Day,24),(Hour,60),(Minute,60),(Second,1000),(Millisecond,1)]
+const fixedperiod_conversions = [(Week,7),(Day,24),(Hour,60),(Minute,60),(Second,1000),(Millisecond,1000),(Microsecond,1000),(Nanosecond,1)]
 for i = 1:length(fixedperiod_conversions)
     (T,n) = fixedperiod_conversions[i]
     N = 1

@@ -11,6 +11,7 @@ include("dates/conversions.jl")
 include("dates/ranges.jl")
 include("dates/adjusters.jl")
 include("dates/io.jl")
+include("dates/time.jl")
 
 export Period, DatePeriod, TimePeriod,
        Year, Month, Week, Day, Hour, Minute, Second, Millisecond,

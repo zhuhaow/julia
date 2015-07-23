@@ -12,7 +12,7 @@ for T in (:Year,:Month,:Week,:Day)
         $T(v::Number) = new(v)
     end
 end
-for T in (:Hour,:Minute,:Second,:Millisecond)
+for T in (:Hour,:Minute,:Second,:Millisecond,:Microsecond,:Nanosecond)
     @eval immutable $T <: TimePeriod
         value::Int64
         $T(v::Number) = new(v)
