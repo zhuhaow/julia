@@ -212,7 +212,14 @@ function runtests(A::Array, I...)
     ldc = Base.subarray_linearindexing_dim(typeof(A), typeof(I))
     ld == ldc || err_li(I, ld, ldc)
     # sub
-    S = sub(A, I...)
+    local S
+    try
+        S = @inferred(sub(A, I...))
+    catch err
+        @show typeof(A)
+        @show I
+        rethrow(err)
+    end
     getLD(S) == ldc || err_li(S, ldc)
     if Base.iscontiguous(S)
         @test S.stride1 == 1
@@ -221,7 +228,13 @@ function runtests(A::Array, I...)
     test_cartesian(S, C)
     test_mixed(S, C)
     # slice
-    S = slice(A, I...)
+    try
+        S = @inferred(slice(A, I...))
+    catch err
+        @show typeof(A)
+        @show I
+        rethrow(err)
+    end
     getLD(S) == ldc || err_li(S, ldc)
     test_linear(S, C)
     test_cartesian(S, C)
@@ -245,7 +258,7 @@ function runtests(A::SubArray, I...)
     # sub
     local S
     try
-        S = sub(A, I...)
+        S = @inferred(sub(A, I...))
     catch err
         @show typeof(A)
         @show A.indexes
@@ -259,7 +272,7 @@ function runtests(A::SubArray, I...)
     test_mixed(S, C)
     # slice
     try
-        S = slice(A, I...)
+        S = @inferred(slice(A, I...))
     catch err
         @show typeof(A)
         @show A.indexes
