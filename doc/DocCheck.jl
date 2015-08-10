@@ -85,7 +85,7 @@ undocumented_by_file() = undocumented_by_file(Base)
 # This also only works with Base functions; the other "undocumented*"
 # functions are more general.
 
-# Based on code by @jihao
+# Based on code by @jiahao
 function _undocumented_rst()
     init_help()
     depdoc = havecount = total = 0
@@ -168,7 +168,7 @@ function gen_undocumented_template(outfile = "$JULIA_HOME/../../doc/UNDOCUMENTED
                         li = m.func.code
                         e = uncompressed_ast(li)
                         argnames = e.args[1]
-                        decls = map(argtype_decl, argnames, {m.sig...})
+                        decls = map(argtype_decl, argnames, collect(m.sig))
                         args = join(decls, ",")
                         line = line * "($args)"
                     else
