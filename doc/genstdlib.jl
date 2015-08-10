@@ -87,6 +87,6 @@ end
 for folder in ["stdlib", "manual", "devdocs"]
     println("\nConverting $folder/\n")
     for file in readdir("$folder")
-        translate("$folder/$file")
+        translate(joinpath(folder, file))
     end
 end
