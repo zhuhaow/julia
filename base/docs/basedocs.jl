@@ -284,7 +284,7 @@ keywords[:immutable] = doc"""
   See `type` and the manual for more information.
   """
 
-"""
+doc"""
 Executes an expression, printing the time it took to
 execute and the total number of bytes its execution caused to be
 allocated. Returns the value of the expression. For example:
@@ -294,7 +294,7 @@ allocated. Returns the value of the expression. For example:
       2+2
     end
 """
-:@time
+@time
 
 doc"""
 Construct a regex, such as `r"^[a-z]*$"`. The regex also accepts
@@ -315,8 +315,8 @@ For example, this regex has all three flags enabled:
 """
 :(r"")
 
-"""
-    push!(collection, items...) → collection
+doc"""
+    push!(collection, items...) -> collection
 
 Insert `items` at the end of `collection`.
 
@@ -326,7 +326,7 @@ push!
 
 if Base.USE_GPL_LIBS
 
-@doc doc"""
+doc"""
     fft(A[, dims])
 
 Performs a multidimensional FFT of the array `A`.  The optional
@@ -350,7 +350,8 @@ transformed dimension of `A`.
 Higher performance is usually possible with multi-threading. Use
 `FFTW.set_num_threads(np)` to use `np` threads, if you have `np`
 processors.
-""" fft
+"""
+fft
 
 end # USE_GPL_LIBS
 
