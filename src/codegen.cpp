@@ -1857,7 +1857,7 @@ static Value *emit_lambda_closure(jl_value_t *expr, jl_codectx_t *ctx)
             val = builder.CreateLoad(vari.memloc, vari.isVolatile);
         }
         else {
-            assert(!vari.isAssigned); // make sure there wasn't an inference / codegen error earlier
+            assert(!vari.isAssigned || vari.value.isghost); // make sure there wasn't an inference / codegen error earlier
             val = boxed(vari.value, ctx);
             if (!vari.value.isghost)
                 make_gcroot(val, ctx);
@@ -3051,7 +3051,7 @@ static jl_cgval_t emit_var(jl_sym_t *sym, jl_value_t *ty, jl_codectx_t *ctx, boo
             return v;
         }
     }
-    else if (vi.isVolatile) {
+    else if (vi.isVolatile && !vi.value.isghost) {
         // copy value to a non-volatile location
         assert(vi.value.ispointer);
         Type *T = julia_type_to_llvm(vi.value.typ)->getPointerTo();
@@ -3137,9 +3137,13 @@ static void emit_assignment(jl_value_t *l, jl_value_t *r, jl_codectx_t *ctx)
     // it's a local variable or closure variable
     jl_varinfo_t &vi = ctx->vars[s];
     if (!vi.memloc && !vi.hasGCRoot && vi.used
-            && !vi.isArgument && !is_stable_expr(r, ctx)) {
+            && !vi.isArgument && !is_stable_expr(r, ctx) && !vi.value.isghost) {
+        Instruction *newroot = cast<Instruction>(emit_local_slot(ctx->gc.argSpaceSize++, ctx));
+        newroot->removeFromParent(); // move it to the gc frame basic block so it can be reused as needed
+        newroot->insertAfter(ctx->gc.last_gcframe_inst);
+        vi.memloc = newroot;
         vi.hasGCRoot = true; // this has been discovered to need a gc root, add it now
-        vi.memloc = emit_local_slot(ctx->gc.argSpaceSize++, ctx);
+        //TODO: move this logic after the emit_expr
     }
 
     if (vi.memloc || !vi.hasGCRoot) {
@@ -4486,6 +4490,10 @@ static Function *emit_function(jl_lambda_info_t *lam)
     for(i=0; i < largslen; i++) {
         jl_sym_t *s = jl_decl_var(jl_cellref(largs,i));
         jl_varinfo_t &varinfo = ctx.vars[s];
+        if (varinfo.value.isghost) {
+            // no need to explicitly load/store a ghost value
+            continue;
+        }
         if (store_unboxed_p(s, &ctx)) {
             if (varinfo.isAssigned) // otherwise, just leave it in the input register
                 alloc_local(s, &ctx);
@@ -4501,6 +4509,10 @@ static Function *emit_function(jl_lambda_info_t *lam)
         jl_varinfo_t &vi = ctx.vars[s];
         if (vi.isArgument)
             continue;
+        if (vi.value.isghost && !vi.usedUndef) {
+            // no need to explicitly load/store a ghost value
+            continue;
+        }
         if (store_unboxed_p(s, &ctx)) {
             alloc_local(s, &ctx);
         }
@@ -4549,6 +4561,10 @@ static Function *emit_function(jl_lambda_info_t *lam)
         jl_sym_t *s = jl_decl_var(jl_cellref(largs,i));
         jl_varinfo_t &varinfo = ctx.vars[s];
         assert(!varinfo.memloc); // arguments shouldn't also be in the closure env
+        if (varinfo.value.isghost) {
+            // no need to explicitly load/store a ghost value
+            continue;
+        }
         if (store_unboxed_p(s, &ctx)) {
             varinfo.hasGCRoot = true;
         }
@@ -4562,7 +4578,7 @@ static Function *emit_function(jl_lambda_info_t *lam)
         jl_sym_t *s = (jl_sym_t*)jl_cellref(jl_cellref(vinfos,i),0);
         jl_varinfo_t &varinfo = ctx.vars[s];
         if (varinfo.memloc || varinfo.isArgument)
-            continue;
+            continue; // gc root already created
         if (store_unboxed_p(s, &ctx)) {
             varinfo.hasGCRoot = true;
         }
@@ -4683,6 +4699,9 @@ static Function *emit_function(jl_lambda_info_t *lam)
             assert(inst);
             builder.CreateStore(builder.CreateCall(prepare_call(jlbox_func), literal_pointer_val(inst)), lv);
         }
+        else {
+            assert(vi.memloc == NULL);
+        }
     }
 
     // step 13. allocate rest argument if necessary
@@ -4723,7 +4742,7 @@ static Function *emit_function(jl_lambda_info_t *lam)
             }
         }
         else {
-            assert(vi.memvalue == NULL);
+            assert(vi.memloc == NULL);
         }
     }
 
