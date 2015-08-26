@@ -2277,13 +2277,6 @@ See :func:`schurfact`
 schur(A,B)
 
 doc"""
-    isexecutable(path) -> Bool
-
-Returns `true` if the current user has permission to execute `path`, `false` otherwise.
-"""
-isexecutable
-
-doc"""
     acot(x)
 
 Compute the inverse cotangent of `x`, where the output is in radians
@@ -6134,9 +6127,9 @@ Get the fully-qualified name of a module as a tuple of symbols. For example, `fu
 fullname
 
 doc"""
-    isreadable(path) -> Bool
+    isreadable(io) -> Bool
 
-Returns `true` if the current user has permission to read `path`, `false` otherwise.
+Returns `true` if the specified IO object is readable (if that can be determined).
 """
 isreadable
 
@@ -11549,9 +11542,9 @@ Create a "value type" out of `c`, which must be an `isbits` value. The intent of
 Val
 
 doc"""
-    iswritable(path) -> Bool
+    iswritable(io) -> Bool
 
-Returns `true` if the current user has permission to write to `path`, `false` otherwise.
+Returns `true` if the specified IO object is writable (if that can be determined).
 """
 iswritable
 
