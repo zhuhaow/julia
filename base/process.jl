@@ -106,7 +106,7 @@ uvtype(::DevNullStream) = UV_STREAM
 uvhandle(x::RawFD) = convert(Ptr{Void}, x.fd % UInt)
 uvtype(x::RawFD) = UV_RAW_FD
 
-typealias Redirectable Union{AsyncStream, FS.File, FileRedirect, DevNullStream, IOStream, RawFD}
+typealias Redirectable Union{AsyncStream, Filesystem.File, FileRedirect, DevNullStream, IOStream, RawFD}
 
 immutable CmdRedirect <: AbstractCmd
     cmd::AbstractCmd
@@ -353,7 +353,7 @@ function setup_stdio(stdio::Pipe, readable::Bool)
 end
 
 function setup_stdio(stdio::IOStream, readable::Bool)
-    io = FS.File(RawFD(fd(stdio)))
+    io = Filesystem.File(RawFD(fd(stdio)))
     return (io, false)
 end
 
@@ -366,7 +366,7 @@ function setup_stdio(stdio::FileRedirect, readable::Bool)
         attr |= stdio.append ? JL_O_APPEND : JL_O_TRUNC
         perm = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH
     end
-    io = FS.open(stdio.filename, attr, perm)
+    io = Filesystem.open(stdio.filename, attr, perm)
     return (io, true)
 end
 
@@ -433,7 +433,7 @@ end
 # \ A set of up to 256 stdio instructions, where each entry can be either:
 #   | - An AsyncStream to be passed to the child
 #   | - DevNull to pass /dev/null
-#   | - An FS.File object to redirect the output to
+#   | - An Filesystem.File object to redirect the output to
 #   \ - An ASCIIString specifying a filename to be opened
 
 spawn_opts_swallow(stdios::StdIOSet, exitcb::Callback=false, closecb::Callback=false) =

@@ -792,18 +792,20 @@ end
 
 # Filesystem module updates
 
+const FS = Filesystem
+
 isreadable(path...) = isreadable(stat(path...))
 iswritable(path...) = iswritable(stat(path...))
 isexecutable(path...) = isexecutable(stat(path...))
-function isreadable(st::StatStruct)
+function isreadable(st::FS.StatStruct)
     depwarn("isreadable is deprecated as it implied that the file would actually be readable by the user. see also the man page for `access`", :isreadable)
     return (st.mode & 0o444) > 0
 end
-function iswritable(st::StatStruct)
+function iswritable(st::FS.StatStruct)
     depwarn("iswritable is deprecated as it implied that the file would actually be writable by the user. see also the man page for `access`", :iswritable)
     return (st.mode & 0o222) > 0
 end
-function isexecutable(st::StatStruct)
+function isexecutable(st::FS.StatStruct)
     depwarn("isexecutable is deprecated as it implied that the file would actually be executable by the user. see also the man page for `access`", :isexecutable)
     return (st.mode & 0o111) > 0
 end
