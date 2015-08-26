@@ -94,10 +94,12 @@ function write(s::IO, ch::Char)
     end
 end
 
-function write(s::IO, p::Ptr, n::Integer)
+function write(s::IO, p::Ref{UInt8}, n::Integer)
     local written::Int = 0
+    proot = cconvert(Ref{UInt8}, p)
+    pptr = unsafe_convert(Ptr{UInt8}, proot)
     for i=1:n
-        written += write(s, unsafe_load(p, i))
+        written += write(s, unsafe_load(ptr, i))
     end
     return written
 end
