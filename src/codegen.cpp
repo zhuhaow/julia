@@ -5521,6 +5521,7 @@ static void init_julia_llvm_env(Module *m)
     FPM->doInitialization();
 }
 
+extern "C" void jl_init_debuginfo(void);
 extern "C" void jl_init_codegen(void)
 {
 #if defined(_OS_WINDOWS_) && defined(_CPU_X86_64_)
@@ -5535,6 +5536,7 @@ extern "C" void jl_init_codegen(void)
 #else
     imaging_mode = jl_generating_output();
 #endif
+    jl_init_debuginfo();
 
 #if LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR <= 3
     // this option disables LLVM's signal handlers

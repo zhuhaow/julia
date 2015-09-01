@@ -58,6 +58,13 @@ extern DLLEXPORT ExecutionEngine *jl_ExecutionEngine;
 typedef object::SymbolRef SymRef;
 #endif
 
+static uv_rwlock_t threadsafe;
+
+extern "C" void jl_init_debuginfo()
+{
+    uv_rwlock_init(&threadsafe);
+}
+
 // --- storing and accessing source location metadata ---
 
 #ifndef USE_MCJIT
@@ -184,15 +191,18 @@ public:
     virtual void NotifyFunctionEmitted(const Function &F, void *Code,
                                        size_t Size, const EmittedFunctionDetails &Details)
     {
+        uv_rwlock_wrlock(&threadsafe);
 #if defined(_OS_WINDOWS_)
         create_PRUNTIME_FUNCTION((uint8_t*)Code, Size, F.getName(), (uint8_t*)Code, Size, NULL);
 #endif
         FuncInfo tmp = {&F, Size, F.getName().str(), std::string(), Details.LineStarts};
         info[(size_t)(Code)] = tmp;
+        uv_rwlock_wrunlock(&threadsafe);
     }
 
     std::map<size_t, FuncInfo, revcomp>& getMap()
     {
+        uv_rwlock_rdlock(&threadsafe);
         return info;
     }
 #endif // ifndef USE_MCJIT
@@ -205,6 +215,7 @@ public:
     virtual void NotifyObjectEmitted(const ObjectImage &obj)
 #endif
     {
+        uv_rwlock_wrlock(&threadsafe);
         uint64_t Addr;
         uint64_t Size;
         object::SymbolRef::Type SymbolType;
@@ -420,6 +431,7 @@ public:
             objectmap[Addr] = tmp;
         }
 #endif
+        uv_rwlock_wrunlock(&threadsafe);
     }
 
     // must implement if we ever start freeing code
@@ -428,6 +440,7 @@ public:
 
     std::map<size_t, ObjectInfo, revcomp>& getObjectMap()
     {
+        uv_rwlock_rdlock(&threadsafe);
         return objectmap;
     }
 #endif // USE_MCJIT
@@ -639,6 +652,7 @@ void jl_getDylibFunctionInfo(char **name, size_t *line, char **filename,
         obfiletype::iterator it = objfilemap.find(fbase);
         llvm::object::ObjectFile *obj = NULL;
         if (it == objfilemap.end()) {
+            // TODO: need write lock here for objfilemap syncronization
 #if defined(_OS_DARWIN_)
 #ifdef LLVM36
            std::unique_ptr<MemoryBuffer> membuf = MemoryBuffer::getMemBuffer(
@@ -778,8 +792,7 @@ void jl_getFunctionInfo(char **name, size_t *line, char **filename,
 
 #ifdef USE_MCJIT
     // With MCJIT we can get function information directly from the ObjectFile
-    std::map<size_t, ObjectInfo, revcomp> &objmap =
-        jl_jit_events->getObjectMap();
+    std::map<size_t, ObjectInfo, revcomp> &objmap = jl_jit_events->getObjectMap();
     std::map<size_t, ObjectInfo, revcomp>::iterator it =
         objmap.lower_bound(pointer);
 
@@ -805,6 +818,7 @@ void jl_getFunctionInfo(char **name, size_t *line, char **filename,
 #endif
         lookup_pointer(context, name, line, filename, pointer, 1, fromC);
         delete context;
+        uv_rwlock_rdunlock(&threadsafe);
         return;
     }
 
@@ -819,6 +833,7 @@ void jl_getFunctionInfo(char **name, size_t *line, char **filename,
             // Technically not true, but we don't want them
             // in julia backtraces, so close enough
             *fromC = 1;
+            uv_rwlock_rdunlock(&threadsafe);
             return;
         }
 
@@ -827,6 +842,7 @@ void jl_getFunctionInfo(char **name, size_t *line, char **filename,
 
         if ((*it).second.lines.empty()) {
             *fromC = 1;
+            uv_rwlock_rdunlock(&threadsafe);
             return;
         }
 
@@ -864,10 +880,12 @@ void jl_getFunctionInfo(char **name, size_t *line, char **filename,
         if (*line == (size_t) -1) {
             *line = prev.Loc.getLine();
         }
+        uv_rwlock_rdunlock(&threadsafe);
         return;
     }
 #endif // USE_MCJIT
     jl_getDylibFunctionInfo(name, line, filename, pointer, fromC, skipC);
+    uv_rwlock_rdunlock(&threadsafe);
 }
 
 int jl_get_llvmf_info(uint64_t fptr, uint64_t *symsize, uint64_t *slide,

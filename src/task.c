@@ -772,6 +772,8 @@ DLLEXPORT void gdblookup(ptrint_t ip)
         jl_safe_printf("%s at %s:%" PRIuPTR "\n", func_name, file_name,
                        (uintptr_t)line_num);
     }
+    free(func_name);
+    free(file_name);
 }
 
 DLLEXPORT void jlbacktrace()
