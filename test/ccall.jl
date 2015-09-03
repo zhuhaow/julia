@@ -209,3 +209,13 @@ for (t,v) in ((Complex{Int32},:ci32),(Complex{Int64},:ci64),
         #b = ccall(cfunction($fname,Any,(Ref{Any},)),Any,(Ref{Any},),$v) # unimplemented
     end
 end
+
+let pif = Float64(pi), r = Ref(pif)
+    io = IOBuffer()
+    show(io, r)
+    @test takebuf_string(io) == string("Base.RefValue{Float64}(",pif,")")
+    showcompact(io, r)
+    str = takebuf_string(io)
+    showcompact(io, pif)
+    @test str == string("Base.RefValue{Float64}(",takebuf_string(io),")")
+end
