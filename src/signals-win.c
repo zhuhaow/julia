@@ -2,6 +2,7 @@
 
 // Windows
 //
+static BOOL (*pSetThreadStackGuarantee)(PULONG);
 DLLEXPORT void gdblookup(ptrint_t ip);
 #define WIN32_LEAN_AND_MEAN
 // Copied from MINGW_FLOAT_H which may not be found due to a collision with the builtin gcc float.h
@@ -77,15 +78,14 @@ void __cdecl crt_sig_handler(int sig, int num)
     }
 }
 
-BOOL (*pSetThreadStackGuarantee)(PULONG);
 void restore_signals(void)
 {
-    // Ensure the stack overflow handler has enough space to collect the backtrace
-    ULONG StackSizeInBytes = sig_stack_size;
-    if (uv_dlsym(jl_kernel32_handle, "SetThreadStackGuarantee", (void**)&pSetThreadStackGuarantee) || !pSetThreadStackGuarantee(&StackSizeInBytes))
-        pSetThreadStackGuarantee = NULL;
     //turn on ctrl-c handler
     SetConsoleCtrlHandler(NULL, 0);
+
+    // Ensure the stack overflow handler has enough space to collect the backtrace
+    if (uv_dlsym(jl_kernel32_handle, "SetThreadStackGuarantee", (void**)&pSetThreadStackGuarantee))
+        pSetThreadStackGuarantee = NULL;
 }
 
 void jl_throw_in_ctx(jl_value_t *excpt, CONTEXT *ctxThread, int bt)
@@ -261,7 +261,7 @@ EXCEPTION_DISPOSITION _seh_exception_handler(PEXCEPTION_RECORD ExceptionRecord, 
 }
 #endif
 
-DLLEXPORT void jl_install_sigint_handler(void)
+DLLEXPORT void jl_install_sigint_handler()
 {
     SetConsoleCtrlHandler((PHANDLER_ROUTINE)sigint_handler,1);
 }
@@ -311,7 +311,7 @@ static DWORD WINAPI profile_bt( LPVOID lparam )
     hBtThread = 0;
     return 0;
 }
-DLLEXPORT int jl_profile_start_timer(void)
+DLLEXPORT int jl_profile_start_timer()
 {
     running = 1;
     if (hBtThread == 0) {
@@ -332,12 +332,12 @@ DLLEXPORT int jl_profile_start_timer(void)
     }
     return (hBtThread != NULL ? 0 : -1);
 }
-DLLEXPORT void jl_profile_stop_timer(void)
+DLLEXPORT void jl_profile_stop_timer()
 {
     running = 0;
 }
 
-void jl_install_default_signal_handlers(void)
+void jl_install_default_signal_handlers()
 {
     if (signal(SIGFPE, (void (__cdecl *)(int))crt_sig_handler) == SIG_ERR) {
         jl_error("fatal error: Couldn't set SIGFPE");
@@ -355,4 +355,14 @@ void jl_install_default_signal_handlers(void)
         jl_error("fatal error: Couldn't set SIGTERM");
     }
     SetUnhandledExceptionFilter(exception_handler);
+}
+
+void jl_install_thread_signal_handler()
+{
+    ULONG StackSizeInBytes = sig_stack_size;
+    if (pSetThreadStackGuarantee) {
+        if (!pSetThreadStackGuarantee(&StackSizeInBytes)) {
+            pSetThreadStackGuarantee = NULL;
+        }
+    }
 }

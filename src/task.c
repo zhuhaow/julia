@@ -482,8 +482,8 @@ static void rebase_state(jl_jmp_buf *ctx, intptr_t local_sp, intptr_t new_sp)
 
 #endif /* !COPY_STACKS */
 
-ptrint_t bt_data[MAX_BT_SIZE+1];
-size_t bt_size = 0;
+JL_THREAD ptrint_t bt_data[MAX_BT_SIZE+1];
+JL_THREAD size_t bt_size = 0;
 
 // Always Set *func_name and *file_name to malloc'd pointers (non-NULL)
 static int frame_info_from_ip(char **func_name, size_t *line_num,

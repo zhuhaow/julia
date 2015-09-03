@@ -498,11 +498,6 @@ void _julia_init(JL_IMAGE_SEARCH rel)
 #endif
     uv_dlopen("ws2_32.dll", jl_winsock_handle);
     _jl_exe_handle.handle = GetModuleHandleA(NULL);
-    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
-                         GetCurrentProcess(), (PHANDLE)&hMainThread, 0,
-                         TRUE, DUPLICATE_SAME_ACCESS)) {
-        jl_printf(JL_STDERR, "WARNING: failed to access handle to main thread\n");
-    }
     SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
     if (!SymInitialize(GetCurrentProcess(), NULL, 1)) {
         jl_printf(JL_STDERR, "WARNING: failed to initialize stack walk info\n");

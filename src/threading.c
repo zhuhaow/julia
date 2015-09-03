@@ -69,6 +69,7 @@ DLLEXPORT int16_t jl_threadid() { return ti_tid; }
 
 struct _jl_thread_heap_t *jl_mk_thread_heap(void);
 // must be called by each thread at startup
+
 void ti_initthread(int16_t tid)
 {
     ti_tid = tid;
@@ -84,6 +85,8 @@ void ti_initthread(int16_t tid)
     jl_all_task_states[tid].proot_task = &jl_root_task;
     jl_all_task_states[tid].pexception_in_transit = &jl_exception_in_transit;
     jl_all_task_states[tid].ptask_arg_in_transit = &jl_task_arg_in_transit;
+
+    jl_install_thread_signal_handler();
 }
 
 #ifdef JULIA_ENABLE_THREADING
@@ -280,12 +283,23 @@ void jl_start_threads(void)
         ti_threadsetaffinity(uv_thread_self(), 0);
 
     // create threads
+#ifdef _OS_WINDOWS_
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
+                         GetCurrentProcess(), &jl_all_task_states[0].system_id, 0,
+                         TRUE, DUPLICATE_SAME_ACCESS)) {
+        jl_printf(JL_STDERR, "WARNING: failed to access handle to main thread\n");
+        jl_all_task_states[0].system_id = INVALID_HANDLE_VALUE;
+    }
+#else
+    jl_all_task_states[0].system_id = pthread_self();
+#endif
     targs = malloc((jl_n_threads - 1) * sizeof (ti_threadarg_t *));
     for (i = 0;  i < jl_n_threads - 1;  ++i) {
         targs[i] = (ti_threadarg_t *)malloc(sizeof (ti_threadarg_t));
         targs[i]->state = TI_THREAD_INIT;
         targs[i]->tid = i + 1;
         ti_threadcreate(&ptid, exclusive ? i+1 : -1, ti_threadfun, targs[i]);
+        jl_all_task_states[i + 1].system_id = ptid;
     }
 
     // set up the world thread group
@@ -461,6 +475,14 @@ void jl_init_threading(void)
     jl_max_threads = 1;
     jl_n_threads = 1;
     jl_all_pgcstacks = malloc(jl_n_threads * sizeof(void*));
+
+#if defined(__linux__) && defined(JL_USE_INTEL_JITEVENTS)
+    if (jl_using_intel_jitevents)
+        // Intel VTune Amplifier needs at least 64k for alternate stack.
+        if (SIGSTKSZ < 1<<16)
+            sig_stack_size = 1<<16;
+#endif
+
     ti_initthread(0);
 }
 

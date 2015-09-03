@@ -10,6 +10,8 @@
 extern "C" {
 #endif
 
+#include <threading.h>
+
 // Profiler control variables //
 static volatile ptrint_t *bt_data_prof = NULL;
 static volatile size_t bt_size_max = 0;
