@@ -85,8 +85,9 @@ void ti_initthread(int16_t tid)
     jl_all_task_states[tid].proot_task = &jl_root_task;
     jl_all_task_states[tid].pexception_in_transit = &jl_exception_in_transit;
     jl_all_task_states[tid].ptask_arg_in_transit = &jl_task_arg_in_transit;
-
-    jl_install_thread_signal_handler();
+    jl_all_task_states[tid].signal_stack = jl_install_thread_signal_handler();
+    jl_all_task_states[tid].bt_data = bt_data;
+    jl_all_task_states[tid].pbt_size = &bt_size;
 }
 
 #ifdef JULIA_ENABLE_THREADING

@@ -1415,7 +1415,9 @@ typedef struct {
     jl_value_t **pexception_in_transit;
     jl_value_t * volatile *ptask_arg_in_transit;
     uv_thread_t system_id;
-    void *signal_context; // bt_context_t
+    void *signal_stack;
+    ptrint_t *bt_data;
+    size_t *pbt_size;
 } jl_thread_task_state_t;
 
 extern DLLEXPORT JL_THREAD jl_task_t * volatile jl_current_task;
