@@ -3313,3 +3313,12 @@ code_typed(A12612.f2, Tuple{})
 # issue #12826
 f12826{I<:Integer}(v::Vector{I}) = v[1]
 @test Base.return_types(f12826,Tuple{Array{TypeVar(:I, Integer),1}})[1] == Integer
+
+for j = 1:1
+    x = try
+        error()
+        2
+    catch
+        continue
+    end
+end
