@@ -1559,23 +1559,22 @@ NOINLINE static int gc_mark_module(jl_module_t *m, int d)
 
 static void gc_mark_task_stack(jl_task_t *ta, int d)
 {
-    if (ta->stkbuf != NULL || ta == jl_current_task) {
+    if (ta->stkbuf != NULL || ta == jl_current_task || ta == jl_root_task) {
         if (ta->stkbuf != NULL) {
             gc_setmark_buf(ta->stkbuf, gc_bits(jl_astaggedvalue(ta)));
         }
-#ifdef COPY_STACKS
-        ptrint_t offset;
         if (ta == jl_current_task) {
-            offset = 0;
-            gc_mark_stack((jl_value_t*)ta, jl_pgcstack, offset, d);
+            gc_mark_stack((jl_value_t*)ta, jl_pgcstack, 0, d);
         }
         else {
+            ptrint_t offset;
+#ifdef COPY_STACKS
             offset = (char *)ta->stkbuf - ((char *)jl_stackbase - ta->ssize);
-            gc_mark_stack((jl_value_t*)ta, ta->gcstack, offset, d);
-        }
 #else
-        gc_mark_stack((jl_value_t*)ta, ta->gcstack, 0, d);
+            offset = 0;
 #endif
+            gc_mark_stack((jl_value_t*)ta, ta->gcstack, 0, d);
+        }
     }
 }
 

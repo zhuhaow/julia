@@ -262,7 +262,6 @@ EXE :=
 endif
 
 JULIAGC := MARKSWEEP
-USE_COPY_STACKS := 1
 
 # flag for disabling assertions
 ifeq ($(FORCE_ASSERTIONS), 1)
