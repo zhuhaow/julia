@@ -77,7 +77,7 @@ static jl_fptr_t id_to_fptrs[] = {
   jl_f_arraylen, jl_f_arrayref, jl_f_arrayset, jl_f_arraysize,
   jl_f_instantiate_type, jl_f_kwcall, jl_trampoline,
   jl_f_methodexists, jl_f_applicable, jl_f_invoke,
-  jl_apply_generic, jl_unprotect_stack, jl_f_sizeof, jl_f_new_expr,
+  jl_apply_generic, jl_f_sizeof, jl_f_new_expr,
   NULL };
 
 // pointers to non-AST-ish objects in a compressed tree

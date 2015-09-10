@@ -1381,13 +1381,12 @@ typedef struct _jl_task_t {
     jl_value_t *exception;
     jl_value_t *backtrace;
     jl_function_t *start;
+
+    // hidden state:
     jl_jmp_buf ctx;
-#ifndef COPY_STACKS
-    void *stack;
-#endif
-    size_t bufsz;
-    void *stkbuf;
-    size_t ssize;
+    size_t bufsz; // sizeof stkbuf
+    void *stkbuf; // malloc'd memory
+    size_t ssize; // sizeof the portion of stack used in stkbuf
 
     // current exception handler
     jl_handler_t *eh;
