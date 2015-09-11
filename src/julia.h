@@ -28,6 +28,8 @@ extern "C" {
 #  else
 #    define MAX_ALIGN sizeof(void*)
 #  endif
+#  define UNW_LOCAL_ONLY
+#  include <libunwind.h>
 #else
 #  define jl_jmp_buf jmp_buf
 #  include <malloc.h> //for _resetstkoflw
@@ -1383,10 +1385,15 @@ typedef struct _jl_task_t {
     jl_function_t *start;
 
     // hidden state:
-    jl_jmp_buf ctx;
-    size_t bufsz; // sizeof stkbuf
+#ifdef _OS_WINDOWS_
+    LPVOID fiber; // Fiber that this runs on
+    jl_jmp_buf ctx; // saved thread state
+#else
+    unw_context_t ctx; // saved unwind context
+#endif
     void *stkbuf; // malloc'd memory
-    size_t ssize; // sizeof the portion of stack used in stkbuf
+    unsigned ssize; // sizeof the portion of stack used in stkbuf
+    uint8_t started;
 
     // current exception handler
     jl_handler_t *eh;

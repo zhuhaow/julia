@@ -1564,13 +1564,12 @@ static void gc_mark_task_stack(jl_task_t *ta, int d)
             gc_mark_stack((jl_value_t*)ta, jl_pgcstack, 0, d);
         }
         else {
-            ptrint_t offset;
+            ptrint_t offset = 0;
 #ifdef COPY_STACKS
-            offset = (char *)ta->stkbuf - ((char *)jl_stackbase - ta->ssize);
-#else
-            offset = 0;
+            if (ta != jl_root_task)
+                offset = (char *)ta->stkbuf + ta->ssize - (char *)jl_stackbase;
 #endif
-            gc_mark_stack((jl_value_t*)ta, ta->gcstack, 0, d);
+            gc_mark_stack((jl_value_t*)ta, ta->gcstack, offset, d);
         }
     }
 }

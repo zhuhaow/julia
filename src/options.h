@@ -91,6 +91,8 @@
 // currently only COPY_STACKS is recommended.
 #define COPY_STACKS
 
+#define JL_STACK_SIZE (8*1024*1024)
+
 // sanitizer defaults ---------------------------------------------------------
 
 // Automatically enable MEMDEBUG and KEEP_BODIES for the sanitizers

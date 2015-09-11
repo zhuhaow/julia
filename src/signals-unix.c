@@ -15,11 +15,15 @@ void fpe_handler(int arg)
 static int is_addr_on_stack(void *addr)
 {
 #ifdef COPY_STACKS
-    return ((char*)addr > (char*)jl_stack_lo-3000000 &&
-            (char*)addr < (char*)jl_stack_hi);
+    if (jl_current_task == jl_root_task)
+        return ((char*)addr > (char*)jl_stack_lo-3000000 &&
+                (char*)addr < (char*)jl_stack_hi);
+    else
+        return ((char*)addr > (char*)jl_stackbase - JL_STACK_SIZE &&
+                (char*)addr < (char*)jl_stackbase);
 #else
     return ((char*)addr > (char*)jl_current_task->stkbuf &&
-            (char*)addr < (char*)jl_current_task->stkbuf + jl_current_task->bufsz);
+            (char*)addr < (char*)jl_current_task->stkbuf + jl_current_task->ssize);
 #endif
 }
 

@@ -96,8 +96,6 @@ static void _infer_stack_direction(void)
     _infer_direction_from(&first);
 }
 
-static int mangle_pointers;
-
 static void _probe_arch(void)
 {
     struct _probe_data p;
@@ -113,23 +111,34 @@ static void _probe_arch(void)
     /* do a probe without filler */
     boundlow(&p);
 
-#if defined(__linux__) && defined(__i386__)
-    char **s = (char**)p.ref_probe;
-    mangle_pointers = !(s[4] > jl_stack_lo &&
-                        s[4] < jl_stack_hi);
-#elif defined(__linux__) && defined(__x86_64__)
-    char **s = (char**)p.ref_probe;
-    mangle_pointers = !(s[6] > jl_stack_lo &&
-                        s[6] < jl_stack_hi);
-#else
-    mangle_pointers = 0;
-#endif
-
     intptr_t prior_diff = p.probe_local - p.prior_local;
     _frame_offset = labs(prior_diff);
 }
 
 /* end probing code */
+
+#ifdef _OS_DARWIN_
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+static void *malloc_stack(size_t bufsz)
+{
+    void* stk = mmap(0, bufsz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (stk == MAP_FAILED)
+        jl_throw(jl_memory_exception);
+    // add a guard page to detect stack overflow
+    if (mprotect(stk, jl_page_size, PROT_NONE) == -1) {
+        munmap(stk, bufsz);
+        jl_errorf("mprotect: %s", strerror(errno));
+    }
+    return stk;
+}
+
+#ifndef COPY_STACKS
+static void free_stack(void *stkbuf, size_t bufsz)
+{
+    munmap(stkbuf, bufsz);
+}
+#endif
 
 static jl_sym_t *done_sym;
 static jl_sym_t *failed_sym;
@@ -142,44 +151,55 @@ JL_THREAD jl_task_t *jl_root_task;
 DLLEXPORT JL_THREAD jl_value_t *jl_exception_in_transit;
 DLLEXPORT JL_THREAD jl_gcframe_t *jl_pgcstack = NULL;
 
+#ifdef _OS_WINDOWS_
+static JL_THREAD LPVOID jl_basefiber;
+#else
+static JL_THREAD unw_context_t jl_basectx;
+static JL_THREAD unw_cursor_t jl_basecursor;
+#if defined(_CPU_X86_) || defined(_CPU_X86_64_)
+#define PUSH_RET(ctx, stk) \
+    do { \
+        stk -= sizeof(uintptr_t); \
+        *(uintptr_t*)stk = 0; /* push RIP/EIP onto the stack */ \
+    } while (0)
+#elif defined(_CPU_ARM_)
+#define PUSH_RET(ctx, stk) \
+    unw_set_reg(ctx, UNW_ARM_R14, 0) /* put NULL into the LR */
+#else
+#error please define how to simulate a CALL on this platform
+#endif
+#endif
+
 #ifdef COPY_STACKS
-static JL_THREAD jl_jmp_buf * volatile jl_jmp_target;
-
-#if (defined(_CPU_X86_64_) || defined(_CPU_X86_)) && !defined(_COMPILER_MICROSOFT_)
-#define ASM_COPY_STACKS
-#endif
 JL_THREAD void *jl_stackbase;
-
-#ifndef ASM_COPY_STACKS
-static JL_THREAD jl_jmp_buf jl_base_ctx; // base context of stack
-#endif
 
 static void NOINLINE save_stack(jl_task_t *t)
 {
-    if (t->state == done_sym || t->state == failed_sym)
+    if (t->state == done_sym || t->state == failed_sym || t == jl_root_task)
         return;
     volatile char *_x;
     size_t nb = (char*)jl_stackbase - (char*)&_x;
     char *buf;
-    if (t->stkbuf == NULL || t->bufsz < nb) {
-        buf = (char*)realloc(t->stkbuf, nb);
+    if (t->stkbuf == NULL || ((size_t*)t->stkbuf)[-1] < nb) {
+        buf = (char*)realloc(t->stkbuf ? t->stkbuf - sizeof(size_t) : NULL,
+                nb + sizeof(size_t));
         if (buf == NULL)
             jl_throw(jl_memory_exception);
-        t->stkbuf = buf;
-        t->bufsz = nb;
+        t->stkbuf = buf + sizeof(size_t);
+        ((size_t*)t->stkbuf)[-1] = nb;
     }
     else {
         buf = (char*)t->stkbuf;
     }
     t->ssize = nb;
-    memcpy(buf, (char*)&_x, nb);
+    memcpy(t->stkbuf, (char*)&_x, nb);
     // this task's stack could have been modified after
     // it was marked by an incremental collection
     // move the barrier back instead of walking it again here
     jl_gc_wb_back(t);
 }
 
-void NOINLINE restore_stack(jl_task_t *t, jl_jmp_buf *where, char *p)
+void NOINLINE NORETURN restore_stack(jl_task_t *t, char *p)
 {
     char *_x = (char*)jl_stackbase - t->ssize;
     if (!p) {
@@ -187,12 +207,20 @@ void NOINLINE restore_stack(jl_task_t *t, jl_jmp_buf *where, char *p)
         if ((char*)&_x > _x) {
             p = (char*)alloca((char*)&_x - _x);
         }
-        restore_stack(t, where, p);
+        restore_stack(t, p);
     }
-    jl_jmp_target = where;
     assert(t->stkbuf != NULL);
     memcpy(_x, t->stkbuf, t->ssize);
-    jl_longjmp(*jl_jmp_target, 1);
+#ifdef _OS_WINDOWS_
+    jl_longjmp(t->ctx, 1);
+#else
+    unw_cursor_t unw_cursor;
+    unw_init_local(&unw_cursor, &t->ctx);
+    int r = unw_step(&unw_cursor); // skip the rest of ctx_switch on return
+    assert(r > 0); (void)r;
+    unw_resume(&unw_cursor);
+#endif
+    abort();
 }
 #endif
 
@@ -207,9 +235,12 @@ static void NORETURN finish_task(jl_task_t *t, jl_value_t *resultval)
     t->result = resultval;
     jl_gc_wb(t, t->result);
 #ifdef COPY_STACKS
+    // early free of stkbuf
     void *stkbuf = t->stkbuf;
-    t->stkbuf = NULL;
-    free(stkbuf);
+    if (stkbuf != NULL) {
+        t->stkbuf = NULL;
+        free(stkbuf - sizeof(size_t));
+    }
 #endif
     if (task_done_hook_func == NULL) {
         task_done_hook_func = (jl_function_t*)jl_get_global(jl_base_module,
@@ -234,41 +265,38 @@ static void NOINLINE NORETURN start_task()
 {
     // this runs the first time we switch to a task
     jl_task_t *t = jl_current_task;
+    t->started = 1;
     throw_if_exception_set(t);
     jl_value_t *res = jl_apply(t->start, NULL, 0);
     finish_task(t, res);
     abort();
 }
 
-#ifdef COPY_STACKS
-#ifndef ASM_COPY_STACKS
-static void NOINLINE set_base_ctx(char *__stk)
+#ifdef _OS_WINDOWS_
+static VOID NOINLINE NORETURN CALLBACK start_fiber(PVOID lpParameter)
 {
-    if (jl_setjmp(jl_base_ctx, 1)) {
+#ifdef COPY_STACKS
+    void *stk = &lpParameter;
+    jl_stackbase = stk;
+#endif
+    if (jl_setjmp(jl_basectx, 0))
         start_task();
-    }
+    SwitchToFiber(jl_current_task->fiber);
+    start_task();
 }
-#else
-void set_base_ctx(char *__stk) { }
 #endif
-#endif
-
 
 DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
-{ // keep this function small, since we want to keep the stack frame
-  // leading up to this also quite small
+{
     _julia_init(rel);
-#ifdef COPY_STACKS
-    char __stk;
-    jl_stackbase = (char*)(((uptrint_t)&__stk + sizeof(__stk))&-16); // also ensures stackbase is 16-byte aligned
-    set_base_ctx(&__stk); // separate function, to record the size of a stack frame
-#endif
 }
 
-static void ctx_switch(jl_task_t *t, jl_jmp_buf *where)
+static void ctx_switch(jl_task_t *t)
 {
     if (t == jl_current_task)
         return;
+    jl_task_t *lastt = jl_current_task;
+    bt_size = 0;  // backtraces don't survive task switches, see e.g. issue #12485
     /*
       making task switching interrupt-safe is going to be challenging.
       we need JL_SIGATOMIC_BEGIN in jl_enter_handler, and then
@@ -282,67 +310,67 @@ static void ctx_switch(jl_task_t *t, jl_jmp_buf *where)
       *IF AND ONLY IF* throwing the exception involved a task switch.
     */
     //JL_SIGATOMIC_BEGIN();
-    if (!jl_setjmp(jl_current_task->ctx, 0)) {
-        bt_size = 0;  // backtraces don't survive task switches, see e.g. issue #12485
-#ifdef COPY_STACKS
-        jl_task_t *lastt = jl_current_task;
-        save_stack(lastt);
-#endif
 
-        // set up global state for new task
-        jl_current_task->gcstack = jl_pgcstack;
-        jl_pgcstack = t->gcstack;
+    // set up global state for new task
+    jl_current_task->gcstack = jl_pgcstack;
+    jl_pgcstack = t->gcstack;
 
-        // restore task's current module, looking at parent tasks
-        // if it hasn't set one.
-        jl_task_t *last = t;
-        while (last->current_module == NULL && last != jl_root_task) {
-            last = last->parent;
-        }
-        if (last->current_module != NULL) {
-            jl_current_module = last->current_module;
-        }
-
-        t->last = jl_current_task;
-        jl_gc_wb(t, t->last);
-        jl_current_task = t;
-
-#ifdef COPY_STACKS
-        if (t->stkbuf) {
-            restore_stack(t, where, NULL);
-        }
-        else {
-#ifdef ASM_COPY_STACKS
-            void *stackbase = jl_stackbase;
-#ifdef _CPU_X86_64_
-#ifdef _OS_WINDOWS_
-            stackbase -= 0x20;
-#endif
-            asm(" movq %0, %%rsp;\n"
-                " xorq %%rbp, %%rbp;\n"
-                " push %%rbp;\n" // instead of RSP
-                " jmp %P1;\n" // call stack_task with fake stack frame
-                " ud2"
-                : : "r"(stackbase), "i"(&start_task) : "memory" );
-#elif defined(_CPU_X86_)
-            asm(" movl %0, %%esp;\n"
-                " xorl %%ebp, %%ebp;\n"
-                " push %%ebp;\n" // instead of ESP
-                " jmp %P1;\n" // call stack_task with fake stack frame
-                " ud2"
-                : : "r" (stackbase), ""(&start_task) : "memory" );
-#else
-#error ASM_COPY_STACKS not supported on this cpu architecture
-#endif
-#else // ASM_COPY_STACKS
-            jl_longjmp(jl_base_ctx, 1);
-#endif
-        }
-#else
-        jl_longjmp(*where, 1);
-#endif
+    // restore task's current module, looking at parent tasks
+    // if it hasn't set one.
+    jl_task_t *last = t;
+    while (last->current_module == NULL && last != jl_root_task) {
+        last = last->parent;
     }
-    //JL_SIGATOMIC_END();
+    if (last->current_module != NULL) {
+        jl_current_module = last->current_module;
+    }
+
+    t->last = jl_current_task;
+    jl_gc_wb(t, t->last);
+    jl_current_task = t;
+
+#ifdef COPY_STACKS
+    save_stack(lastt); // also allocates lastt->ctx
+#endif
+
+#ifdef _OS_WINDOWS_
+    if (t->fiber != lastt->fiber) {
+        SwitchToFiber(t->fiber);
+        if (t == jl_root_task)
+            return;
+    }
+    if (jl_setjmp(&lastt->ctx, 0)) return; // store the old context
+#else
+    unw_getcontext(&lastt->ctx); // store the old context
+#endif
+
+#ifdef COPY_STACKS
+    if (t != jl_root_task && t->stkbuf) {
+        // task already exists
+        restore_stack(t, NULL); // resume at jl_setjmp of the other thread after restoring the stack (doesn't return)
+    }
+    if (!t->started) { // task not started yet, jump to start_task
+        unw_resume(&jl_basecursor); // (doesn't return)
+    }
+#else
+    if (!t->started) { // task not started yet, jump to start_task
+        char *stk = (char*)t->stkbuf + t->ssize;
+        PUSH_RET(&jl_basecursor, stk);
+        unw_set_reg(&jl_basecursor, UNW_REG_SP, (uintptr_t)stk);
+        unw_resume(&jl_basecursor); // (doesn't return)
+    }
+#endif
+
+#ifdef _OS_WINDOWS_
+    jl_longjmp(t->ctx, 1); // resume at jl_setjmp of the other thread (doesn't return)
+#else
+    unw_cursor_t unw_cursor;
+    unw_init_local(&unw_cursor, &t->ctx);
+    int r = unw_step(&unw_cursor); // skip the rest of ctx_switch on return
+    assert(r > 0); (void)r;
+    unw_resume(&unw_cursor); // (doesn't return)
+#endif
+//JL_SIGATOMIC_END();
 }
 
 JL_THREAD jl_value_t * volatile jl_task_arg_in_transit;
@@ -359,110 +387,12 @@ DLLEXPORT jl_value_t *jl_switchto(jl_task_t *t, jl_value_t *arg)
     if (jl_in_gc)
         jl_error("task switch not allowed from inside gc finalizer");
     jl_task_arg_in_transit = arg;
-    ctx_switch(t, &t->ctx);
+    ctx_switch(t);
     jl_value_t *val = jl_task_arg_in_transit;
     jl_task_arg_in_transit = jl_nothing;
     throw_if_exception_set(jl_current_task);
     return val;
 }
-
-#ifndef COPY_STACKS
-
-#ifdef __linux__
-#if defined(__i386__)
-static intptr_t ptr_mangle(intptr_t p)
-{
-    intptr_t ret;
-    asm(" movl %1, %%eax;\n"
-        " xorl %%gs:0x18, %%eax;"
-        " roll $9, %%eax;"
-        " movl %%eax, %0;"
-        : "=r"(ret) : "r"(p) : "%eax");
-    return ret;
-}
-static intptr_t ptr_demangle(intptr_t p)
-{
-    intptr_t ret;
-    asm(" movl %1, %%eax;\n"
-        " rorl $9, %%eax;"
-        " xorl %%gs:0x18, %%eax;"
-        " movl %%eax, %0;"
-        : "=r"(ret) : "r"(p) : "%eax" );
-    return ret;
-}
-#elif defined(__x86_64__)
-static intptr_t ptr_mangle(intptr_t p)
-{
-    intptr_t ret;
-    asm(" movq %1, %%rax;\n"
-        " xorq %%fs:0x30, %%rax;"
-        " rolq $17, %%rax;"
-        " movq %%rax, %0;"
-        : "=r"(ret) : "r"(p) : "%rax");
-    return ret;
-}
-static intptr_t ptr_demangle(intptr_t p)
-{
-    intptr_t ret;
-    asm(" movq %1, %%rax;\n"
-        " rorq $17, %%rax;"
-        " xorq %%fs:0x30, %%rax;"
-        " movq %%rax, %0;"
-        : "=r"(ret) : "r"(p) : "%rax" );
-    return ret;
-}
-#endif
-#endif //__linux__
-
-/* rebase any values in saved state to the new stack */
-static void rebase_state(jl_jmp_buf *ctx, intptr_t local_sp, intptr_t new_sp)
-{
-    ptrint_t *s = (ptrint_t*)ctx;
-    ptrint_t diff = new_sp - local_sp; /* subtract old base, and add new base */
-#if defined(__linux__) && defined(__i386__)
-    s[3] += diff;
-    if (mangle_pointers)
-        s[4] = ptr_mangle(ptr_demangle(s[4])+diff);
-    else
-        s[4] += diff;
-#elif defined(__linux__) && defined(__x86_64__)
-    if (mangle_pointers) {
-        s[1] = ptr_mangle(ptr_demangle(s[1])+diff);
-        s[6] = ptr_mangle(ptr_demangle(s[6])+diff);
-    }
-    else {
-        s[1] += diff;
-        s[6] += diff;
-    }
-#elif defined(__APPLE__) && defined(__i386__)
-    s[8] += diff;
-    s[9] += diff;
-#elif defined(__APPLE__) && defined(__x86_64__)
-    s[1] += diff;
-    s[2] += diff;
-#else
-#error "COPY_STACKS must be defined on this platform."
-#endif
-}
-static void init_task(jl_task_t *t)
-{
-    if (jl_setjmp(t->ctx, 0)) {
-        start_task();
-    }
-    // this runs when the task is created
-    ptrint_t local_sp = (ptrint_t)&t;
-    char *stk = (char*)LLT_ALIGN((uptrint_t)t->stkbuf, jl_page_size) + jl_page_size;
-    ptrint_t new_sp = (ptrint_t)stk + t->ssize - _frame_offset;
-#ifdef _P64
-    // SP must be 16-byte aligned
-    new_sp = new_sp&-16;
-    local_sp = local_sp&-16;
-#endif
-    memcpy((void*)new_sp, (void*)local_sp, _frame_offset);
-    rebase_state(&t->ctx, local_sp, new_sp);
-}
-
-#endif /* !COPY_STACKS */
 
 ptrint_t bt_data[MAX_BT_SIZE+1];
 size_t bt_size = 0;
@@ -843,6 +773,7 @@ DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)
         ssize = 1*1024*1024; // 1M (for now)
 #endif
     ssize = LLT_ALIGN(ssize, pagesz);
+    t->started = 0;
     t->ssize = ssize;
     t->current_module = NULL;
     t->parent = jl_current_task;
@@ -859,21 +790,8 @@ DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)
     t->eh = NULL;
     t->gcstack = NULL;
     t->stkbuf = NULL;
-
-#ifdef COPY_STACKS
-    t->bufsz = 0;
-#else
-    t->bufsz = ssize + pagesz + (pagesz - 1);
-    char *stk = malloc(t->bufsz);
-    if (stk == NULL)
-        jl_throw(jl_memory_exception);
-    t->stkbuf = stk;
-    stk = (char*)LLT_ALIGN((uptrint_t)stk, pagesz);
-    // add a guard page to detect stack overflow
-    if (mprotect(stk, pagesz - 1, PROT_NONE) == -1)
-        jl_errorf("mprotect: %s", strerror(errno));
-
-    init_task(t);
+#ifndef COPY_STACKS
+    t->stkbuf = malloc_stack(ssize);
 #endif
 
     jl_gc_add_finalizer((jl_value_t*)t, (jl_function_t*)jl_unprotect_stack_func);
@@ -885,12 +803,11 @@ static void jl_unprotect_stack(jl_task_t *t)
     void *stk = t->stkbuf;
     if (stk) {
         t->stkbuf = NULL;
-#ifndef COPY_STACKS
-        stk = (void*)LLT_ALIGN((uptrint_t)stk, jl_page_size);
-        // unprotect stack so it can be reallocated for something else
-        mprotect(stk, jl_page_size - 1, PROT_READ|PROT_WRITE);
+#ifdef COPY_STACKS
+        free(stk - sizeof(size_t));
+#else
+        free_stack(stk, t->ssize);
 #endif
-        free(stk);
     }
 }
 
@@ -938,15 +855,46 @@ void jl_init_root_task(void *stack, size_t ssize)
 {
     jl_current_task = (jl_task_t*)jl_gc_allocobj(sizeof(jl_task_t));
     jl_set_typeof(jl_current_task, jl_task_type);
+
+#ifdef _OS_WINDOWS_
+    if (IsThreadAFiber())
+        jl_current_task->fiber = GetCurrentFiber();
+    else
+        jl_current_task->fiber = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
+    if (jl_current_task->fiber == NULL)
+        jl_error("GetCurrentFiber failed");
+#else
+    int r = unw_getcontext(&jl_basectx);
+    if (r != 0)
+        jl_error("unw_getcontext failed");
+    r = unw_init_local(&jl_basecursor, &jl_basectx);
+    if (r != 0)
+        jl_error("unw_init_local failed");
+    unw_set_reg(&jl_basecursor, UNW_REG_IP, (uintptr_t)&start_task);
+#endif
+
+#ifdef COPY_STACKS
+#ifdef _OS_WINDOWS_
+    jl_basefiber = CreateFiberEx(JL_STACK_SIZE, JL_STACK_SIZE, FIBER_FLAG_FLOAT_SWITCH, start_fiber, NULL);
+    if (jl_basefiber == NULL)
+        jl_error("CreateFiberEx failed");
+    SwitchToFiber(jl_basefiber); // initializes jl_stackbase and jl_basectx
+#else
+    char *stk = malloc_stack(JL_STACK_SIZE) + JL_STACK_SIZE;
+    jl_stackbase = stk;
+    PUSH_RET(&jl_basecursor, stk);
+    unw_set_reg(&jl_basecursor, UNW_REG_SP, (uintptr_t)stk);
+#endif
+#endif
+
 #ifdef COPY_STACKS
     jl_current_task->stkbuf = NULL; // address of stack save location
     jl_current_task->ssize = 0; // size of saved piece
-    jl_current_task->bufsz = 0; // sizeof stkbuf allocation
 #else
     jl_current_task->stkbuf = stack - ssize; // address of bottom of stack
     jl_current_task->ssize = ssize; // sizeof stack
-    jl_current_task->bufsz = ssize + 4096; // sizeof stkbuf allocation
 #endif
+    jl_current_task->started = 1;
     jl_current_task->parent = jl_current_task;
     jl_current_task->current_module = jl_current_module;
     jl_current_task->last = jl_current_task;
