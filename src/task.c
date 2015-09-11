@@ -1,4 +1,8 @@
 // This file is a part of Julia. License is MIT: http://julialang.org/license
+#if defined(__APPLE__) && defined(HAVE_UCONTEXT)
+// need this to get the real definition of ucontext_t
+#define _XOPEN_SOURCE
+#endif
 
 /*
   task.c
@@ -31,6 +35,13 @@ volatile int jl_in_stackwalk = 0;
 // This gives unwind only local unwinding options ==> faster code
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
+#endif
+
+#if defined(_OS_LINUX_)
+#define HAVE_UCONTEXT
+#endif
+#ifdef HAVE_UCONTEXT
+#include <ucontext.h>
 #endif
 
 /* This probing code is derived from Douglas Jones' user thread library */
@@ -125,11 +136,13 @@ static void *malloc_stack(size_t bufsz)
     void* stk = mmap(0, bufsz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (stk == MAP_FAILED)
         jl_throw(jl_memory_exception);
+#ifndef HAVE_UCONTEXT
     // add a guard page to detect stack overflow
     if (mprotect(stk, jl_page_size, PROT_NONE) == -1) {
         munmap(stk, bufsz);
         jl_errorf("mprotect: %s", strerror(errno));
     }
+#endif
     return stk;
 }
 
@@ -153,8 +166,14 @@ DLLEXPORT JL_THREAD jl_gcframe_t *jl_pgcstack = NULL;
 
 #ifdef _OS_WINDOWS_
 static JL_THREAD LPVOID jl_basefiber;
-#else
-static JL_THREAD unw_context_t jl_basectx;
+static JL_THREAD jl_jmp_buf jl_basectx;
+#elif defined(HAVE_UCONTEXT)
+static JL_THREAD ucontext_t jl_root_uctx;
+#ifdef COPY_STACKS
+static JL_THREAD jl_jmp_buf jl_basectx;
+#endif
+#else // !HAVE_UCONTEXT
+static JL_THREAD unw_context_t jl_base_uctx;
 static JL_THREAD unw_cursor_t jl_basecursor;
 #if defined(_CPU_X86_) || defined(_CPU_X86_64_)
 #define PUSH_RET(ctx, stk) \
@@ -188,9 +207,6 @@ static void NOINLINE save_stack(jl_task_t *t)
         t->stkbuf = buf + sizeof(size_t);
         ((size_t*)t->stkbuf)[-1] = nb;
     }
-    else {
-        buf = (char*)t->stkbuf;
-    }
     t->ssize = nb;
     memcpy(t->stkbuf, (char*)&_x, nb);
     // this task's stack could have been modified after
@@ -215,9 +231,10 @@ void NOINLINE NORETURN restore_stack(jl_task_t *t, char *p)
     jl_longjmp(t->ctx, 1);
 #else
     unw_cursor_t unw_cursor;
-    unw_init_local(&unw_cursor, &t->ctx);
-    int r = unw_step(&unw_cursor); // skip the rest of ctx_switch on return
-    assert(r > 0); (void)r;
+    if (unw_init_local(&unw_cursor, &t->ctx) != 0)
+        abort();
+    //if (unw_step(&unw_cursor) <= 0) // skip the rest of ctx_switch on return
+    //    abort();
     unw_resume(&unw_cursor);
 #endif
     abort();
@@ -286,6 +303,17 @@ static VOID NOINLINE NORETURN CALLBACK start_fiber(PVOID lpParameter)
 }
 #endif
 
+#if defined(HAVE_UCONTEXT) && defined(COPY_STACKS)
+static void NOINLINE NORETURN start_fiber()
+{
+    if (jl_setjmp(jl_basectx, 0))
+        start_task();
+    setcontext(&jl_root_uctx);
+    abort();
+}
+#endif
+
+
 DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
 {
     _julia_init(rel);
@@ -341,7 +369,11 @@ static void ctx_switch(jl_task_t *t)
     }
     if (jl_setjmp(&lastt->ctx, 0)) return; // store the old context
 #else
+    static JL_THREAD volatile uint8_t first;
+    first = 1;
     unw_getcontext(&lastt->ctx); // store the old context
+    if (!first) return;
+    first = 0;
 #endif
 
 #ifdef COPY_STACKS
@@ -350,14 +382,30 @@ static void ctx_switch(jl_task_t *t)
         restore_stack(t, NULL); // resume at jl_setjmp of the other thread after restoring the stack (doesn't return)
     }
     if (!t->started) { // task not started yet, jump to start_task
+        assert(!t->stkbuf);
+#ifdef HAVE_UCONTEXT
+        jl_longjmp(jl_basectx, 1);
+#else
         unw_resume(&jl_basecursor); // (doesn't return)
+#endif
+        abort();
     }
+    assert(t == jl_root_task);
 #else
     if (!t->started) { // task not started yet, jump to start_task
+#ifdef HAVE_UCONTEXT
+        jl_root_uctx.uc_stack.ss_sp = t->stkbuf;
+        jl_root_uctx.uc_stack.ss_size = t->ssize;
+        makecontext(&jl_root_uctx, &start_task, 0);
+        setcontext(&jl_root_uctx); // (doesn't return)
+#else
         char *stk = (char*)t->stkbuf + t->ssize;
         PUSH_RET(&jl_basecursor, stk);
-        unw_set_reg(&jl_basecursor, UNW_REG_SP, (uintptr_t)stk);
+        if (unw_set_reg(&jl_basecursor, UNW_REG_SP, (uintptr_t)stk) != 0)
+            abort();
         unw_resume(&jl_basecursor); // (doesn't return)
+#endif
+        abort();
     }
 #endif
 
@@ -365,10 +413,12 @@ static void ctx_switch(jl_task_t *t)
     jl_longjmp(t->ctx, 1); // resume at jl_setjmp of the other thread (doesn't return)
 #else
     unw_cursor_t unw_cursor;
-    unw_init_local(&unw_cursor, &t->ctx);
-    int r = unw_step(&unw_cursor); // skip the rest of ctx_switch on return
-    assert(r > 0); (void)r;
+    if (unw_init_local(&unw_cursor, &t->ctx) != 0)
+        abort();
+    //if (unw_step(&unw_cursor) <= 0) // skip the rest of ctx_switch on return
+    //    abort();
     unw_resume(&unw_cursor); // (doesn't return)
+    abort();
 #endif
 //JL_SIGATOMIC_END();
 }
@@ -850,12 +900,8 @@ void jl_init_tasks(void)
     jl_unprotect_stack_func = jl_box_voidpointer(&jl_unprotect_stack);
 }
 
-// Initialize a root task using the given stack.
-void jl_init_root_task(void *stack, size_t ssize)
+static void jl_getbasecontext()
 {
-    jl_current_task = (jl_task_t*)jl_gc_allocobj(sizeof(jl_task_t));
-    jl_set_typeof(jl_current_task, jl_task_type);
-
 #ifdef _OS_WINDOWS_
     if (IsThreadAFiber())
         jl_current_task->fiber = GetCurrentFiber();
@@ -863,29 +909,57 @@ void jl_init_root_task(void *stack, size_t ssize)
         jl_current_task->fiber = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
     if (jl_current_task->fiber == NULL)
         jl_error("GetCurrentFiber failed");
-#else
-    int r = unw_getcontext(&jl_basectx);
-    if (r != 0)
-        jl_error("unw_getcontext failed");
-    r = unw_init_local(&jl_basecursor, &jl_basectx);
-    if (r != 0)
-        jl_error("unw_init_local failed");
-    unw_set_reg(&jl_basecursor, UNW_REG_IP, (uintptr_t)&start_task);
-#endif
-
 #ifdef COPY_STACKS
-#ifdef _OS_WINDOWS_
     jl_basefiber = CreateFiberEx(JL_STACK_SIZE, JL_STACK_SIZE, FIBER_FLAG_FLOAT_SWITCH, start_fiber, NULL);
     if (jl_basefiber == NULL)
         jl_error("CreateFiberEx failed");
     SwitchToFiber(jl_basefiber); // initializes jl_stackbase and jl_basectx
-#else
+#endif
+
+#else // !_OS_WINDOWS_
+
+#ifdef COPY_STACKS
     char *stk = malloc_stack(JL_STACK_SIZE) + JL_STACK_SIZE;
     jl_stackbase = stk;
+#endif
+
+#ifdef HAVE_UCONTEXT
+#ifndef COPY_STACKS
+    int r = getcontext(&jl_root_uctx);
+    if (r != 0)
+        jl_error("getcontext failed");
+#else
+    ucontext_t jl_base_uctx;
+    int r = getcontext(&jl_base_uctx);
+    if (r != 0)
+        jl_error("getcontext failed");
+    jl_base_uctx.uc_stack.ss_sp = stk - JL_STACK_SIZE;
+    jl_base_uctx.uc_stack.ss_size = JL_STACK_SIZE;
+    makecontext(&jl_base_uctx, &start_fiber, 0);
+    swapcontext(&jl_root_uctx, &jl_base_uctx); // initializes jl_basectx
+#endif
+#else
+    int r = unw_getcontext(&jl_base_uctx);
+    if (r != 0)
+        jl_error("unw_getcontext failed");
+    r = unw_init_local(&jl_basecursor, &jl_base_uctx);
+    if (r != 0)
+        jl_error("unw_init_local failed");
+    unw_set_reg(&jl_basecursor, UNW_REG_IP, (uintptr_t)&start_task);
+#ifdef COPY_STACKS
     PUSH_RET(&jl_basecursor, stk);
     unw_set_reg(&jl_basecursor, UNW_REG_SP, (uintptr_t)stk);
 #endif
 #endif
+
+#endif
+}
+
+// Initialize a root task using the given stack.
+void jl_init_root_task(void *stack, size_t ssize)
+{
+    jl_current_task = (jl_task_t*)jl_gc_allocobj(sizeof(jl_task_t));
+    jl_set_typeof(jl_current_task, jl_task_type);
 
 #ifdef COPY_STACKS
     jl_current_task->stkbuf = NULL; // address of stack save location
@@ -913,6 +987,8 @@ void jl_init_root_task(void *stack, size_t ssize)
 
     jl_exception_in_transit = (jl_value_t*)jl_nothing;
     jl_task_arg_in_transit = (jl_value_t*)jl_nothing;
+
+    jl_getbasecontext();
 }
 
 #ifdef __cplusplus
