@@ -172,10 +172,7 @@ static JL_THREAD LPVOID jl_basefiber;
 static JL_THREAD jl_jmp_buf jl_basectx;
 #endif
 #elif defined(HAVE_UCONTEXT)
-static JL_THREAD ucontext_t jl_root_uctx;
-#ifdef COPY_STACKS
-static JL_THREAD jl_jmp_buf jl_basectx;
-#endif
+static JL_THREAD ucontext_t jl_base_uctx;
 #else // !HAVE_UCONTEXT
 static JL_THREAD unw_context_t jl_base_uctx;
 static JL_THREAD unw_cursor_t jl_basecursor;
@@ -310,17 +307,6 @@ static VOID NOINLINE NORETURN CALLBACK start_fiber(PVOID lpParameter)
 }
 #endif
 
-#if defined(HAVE_UCONTEXT) && defined(COPY_STACKS)
-static void NOINLINE NORETURN start_fiber()
-{
-    if (jl_setjmp(jl_basectx, 0))
-        start_task();
-    setcontext(&jl_root_uctx);
-    abort();
-}
-#endif
-
-
 DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
 {
     _julia_init(rel);
@@ -405,7 +391,7 @@ static void ctx_switch(jl_task_t *t)
 #ifdef _OS_WINDOWS_
         jl_longjmp(jl_basectx, 1);
 #elif defined(HAVE_UCONTEXT)
-        jl_longjmp(jl_basectx, 1);
+        setcontext(&jl_base_uctx); // (doesn't return)
 #else
         unw_resume(&jl_basecursor); // (doesn't return)
 #endif
@@ -414,12 +400,11 @@ static void ctx_switch(jl_task_t *t)
     assert(t == jl_root_task);
 #else
     if (!t->started) { // task not started yet, jump to start_task
-#ifdef _OS_WINDOWS_
-#elif defined(HAVE_UCONTEXT)
-        jl_root_uctx.uc_stack.ss_sp = t->stkbuf;
-        jl_root_uctx.uc_stack.ss_size = t->ssize;
-        makecontext(&jl_root_uctx, &start_task, 0);
-        setcontext(&jl_root_uctx); // (doesn't return)
+#if defined(HAVE_UCONTEXT)
+        jl_base_uctx.uc_stack.ss_sp = t->stkbuf;
+        jl_base_uctx.uc_stack.ss_size = t->ssize;
+        makecontext(&jl_base_uctx, &start_task, 0);
+        setcontext(&jl_base_uctx); // (doesn't return)
 #else
         char *stk = (char*)t->stkbuf + t->ssize;
         PUSH_RET(&jl_basecursor, stk);
@@ -957,18 +942,16 @@ static void jl_getbasecontext()
 
 #if defined(HAVE_UCONTEXT)
 #ifndef COPY_STACKS
-    int r = getcontext(&jl_root_uctx);
+    int r = getcontext(&jl_base_uctx);
     if (r != 0)
         jl_error("getcontext failed");
 #else
-    ucontext_t jl_base_uctx;
     int r = getcontext(&jl_base_uctx);
     if (r != 0)
         jl_error("getcontext failed");
     jl_base_uctx.uc_stack.ss_sp = stk - JL_STACK_SIZE;
     jl_base_uctx.uc_stack.ss_size = JL_STACK_SIZE;
-    makecontext(&jl_base_uctx, &start_fiber, 0);
-    swapcontext(&jl_root_uctx, &jl_base_uctx); // initializes jl_basectx
+    makecontext(&jl_base_uctx, &start_task, 0);
 #endif
 #else
     int r = unw_getcontext(&jl_base_uctx);
