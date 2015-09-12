@@ -128,6 +128,7 @@ static void _probe_arch(void)
 
 /* end probing code */
 
+#ifndef _OS_WINDOWS_
 #ifdef _OS_DARWIN_
 #define MAP_ANONYMOUS MAP_ANON
 #endif
@@ -152,6 +153,7 @@ static void free_stack(void *stkbuf, size_t bufsz)
     munmap(stkbuf, bufsz);
 }
 #endif
+#endif
 
 static jl_sym_t *done_sym;
 static jl_sym_t *failed_sym;
@@ -165,8 +167,10 @@ DLLEXPORT JL_THREAD jl_value_t *jl_exception_in_transit;
 DLLEXPORT JL_THREAD jl_gcframe_t *jl_pgcstack = NULL;
 
 #ifdef _OS_WINDOWS_
+#ifdef COPY_STACKS
 static JL_THREAD LPVOID jl_basefiber;
 static JL_THREAD jl_jmp_buf jl_basectx;
+#endif
 #elif defined(HAVE_UCONTEXT)
 static JL_THREAD ucontext_t jl_root_uctx;
 #ifdef COPY_STACKS
@@ -295,11 +299,14 @@ static VOID NOINLINE NORETURN CALLBACK start_fiber(PVOID lpParameter)
 #ifdef COPY_STACKS
     void *stk = &lpParameter;
     jl_stackbase = stk;
-#endif
     if (jl_setjmp(jl_basectx, 0))
         start_task();
     SwitchToFiber(jl_current_task->fiber);
     start_task();
+#else
+    jl_current_task->stkbuf = &lpParameter;
+    start_task();
+#endif
 }
 #endif
 
@@ -357,17 +364,29 @@ static void ctx_switch(jl_task_t *t)
     jl_gc_wb(t, t->last);
     jl_current_task = t;
 
+#if defined(_OS_WINDOWS_) && !defined(COPY_STACKS)
+    (void)lastt;
+    if (!t->fiber) {
+        LPVOID jl_fiber = CreateFiberEx(t->ssize, t->ssize, FIBER_FLAG_FLOAT_SWITCH, start_fiber, NULL);
+        if (jl_fiber == NULL)
+            jl_error("CreateFiberEx failed");
+        t->fiber = jl_fiber;
+    }
+    SwitchToFiber(t->fiber);
+#else
+
 #ifdef COPY_STACKS
     save_stack(lastt); // also allocates lastt->ctx
 #endif
 
 #ifdef _OS_WINDOWS_
+    if (jl_setjmp(lastt->ctx, 0)) return; // store the old context
     if (t->fiber != lastt->fiber) {
         SwitchToFiber(t->fiber);
-        if (t == jl_root_task)
+        if (jl_current_task == jl_root_task || lastt == jl_current_task)
             return;
+        t = jl_current_task;
     }
-    if (jl_setjmp(&lastt->ctx, 0)) return; // store the old context
 #else
     static JL_THREAD volatile uint8_t first;
     first = 1;
@@ -383,7 +402,9 @@ static void ctx_switch(jl_task_t *t)
     }
     if (!t->started) { // task not started yet, jump to start_task
         assert(!t->stkbuf);
-#ifdef HAVE_UCONTEXT
+#ifdef _OS_WINDOWS_
+        jl_longjmp(jl_basectx, 1);
+#elif defined(HAVE_UCONTEXT)
         jl_longjmp(jl_basectx, 1);
 #else
         unw_resume(&jl_basecursor); // (doesn't return)
@@ -393,7 +414,8 @@ static void ctx_switch(jl_task_t *t)
     assert(t == jl_root_task);
 #else
     if (!t->started) { // task not started yet, jump to start_task
-#ifdef HAVE_UCONTEXT
+#ifdef _OS_WINDOWS_
+#elif defined(HAVE_UCONTEXT)
         jl_root_uctx.uc_stack.ss_sp = t->stkbuf;
         jl_root_uctx.uc_stack.ss_size = t->ssize;
         makecontext(&jl_root_uctx, &start_task, 0);
@@ -419,6 +441,7 @@ static void ctx_switch(jl_task_t *t)
     //    abort();
     unw_resume(&unw_cursor); // (doesn't return)
     abort();
+#endif
 #endif
 //JL_SIGATOMIC_END();
 }
@@ -840,8 +863,16 @@ DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)
     t->eh = NULL;
     t->gcstack = NULL;
     t->stkbuf = NULL;
+#ifdef _OS_WINDOWS_
+#ifdef COPY_STACKS
+    t->fiber = jl_basefiber;
+#else
+    t->fiber = NULL;
+#endif
+#else
 #ifndef COPY_STACKS
     t->stkbuf = malloc_stack(ssize);
+#endif
 #endif
 
     jl_gc_add_finalizer((jl_value_t*)t, (jl_function_t*)jl_unprotect_stack_func);
@@ -856,7 +887,11 @@ static void jl_unprotect_stack(jl_task_t *t)
 #ifdef COPY_STACKS
         free(stk - sizeof(size_t));
 #else
+#ifdef _OS_WINDOWS_
+        DeleteFiber(t->fiber);
+#else
         free_stack(stk, t->ssize);
+#endif
 #endif
     }
 }
@@ -903,10 +938,7 @@ void jl_init_tasks(void)
 static void jl_getbasecontext()
 {
 #ifdef _OS_WINDOWS_
-    if (IsThreadAFiber())
-        jl_current_task->fiber = GetCurrentFiber();
-    else
-        jl_current_task->fiber = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
+    jl_current_task->fiber = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
     if (jl_current_task->fiber == NULL)
         jl_error("GetCurrentFiber failed");
 #ifdef COPY_STACKS
@@ -923,7 +955,7 @@ static void jl_getbasecontext()
     jl_stackbase = stk;
 #endif
 
-#ifdef HAVE_UCONTEXT
+#if defined(HAVE_UCONTEXT)
 #ifndef COPY_STACKS
     int r = getcontext(&jl_root_uctx);
     if (r != 0)
