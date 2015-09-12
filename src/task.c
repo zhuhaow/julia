@@ -234,8 +234,6 @@ void NOINLINE NORETURN restore_stack(jl_task_t *t, char *p)
     unw_cursor_t unw_cursor;
     if (unw_init_local(&unw_cursor, &t->ctx) != 0)
         abort();
-    //if (unw_step(&unw_cursor) <= 0) // skip the rest of ctx_switch on return
-    //    abort();
     unw_resume(&unw_cursor);
 #endif
     abort();
@@ -360,11 +358,6 @@ static void ctx_switch(jl_task_t *t)
     }
     SwitchToFiber(t->fiber);
 #else
-
-#ifdef COPY_STACKS
-    save_stack(lastt); // also allocates lastt->ctx
-#endif
-
 #ifdef _OS_WINDOWS_
     if (jl_setjmp(lastt->ctx, 0)) return; // store the old context
     if (t->fiber != lastt->fiber) {
@@ -374,14 +367,12 @@ static void ctx_switch(jl_task_t *t)
         t = jl_current_task;
     }
 #else
-    static JL_THREAD volatile uint8_t first;
-    first = 1;
     unw_getcontext(&lastt->ctx); // store the old context
-    if (!first) return;
-    first = 0;
+    if (t != jl_current_task) return; // this is true iff we have just returned to this context
 #endif
 
 #ifdef COPY_STACKS
+    save_stack(lastt);
     if (t != jl_root_task && t->stkbuf) {
         // task already exists
         restore_stack(t, NULL); // resume at jl_setjmp of the other thread after restoring the stack (doesn't return)
@@ -422,8 +413,6 @@ static void ctx_switch(jl_task_t *t)
     unw_cursor_t unw_cursor;
     if (unw_init_local(&unw_cursor, &t->ctx) != 0)
         abort();
-    //if (unw_step(&unw_cursor) <= 0) // skip the rest of ctx_switch on return
-    //    abort();
     unw_resume(&unw_cursor); // (doesn't return)
     abort();
 #endif
