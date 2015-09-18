@@ -148,7 +148,7 @@ export
     GlobalRef, NewvarNode, GenSym,
     # object model functions
     fieldtype, getfield, setfield!, nfields, throw, tuple, is, ===, isdefined, eval,
-    # arraylen, arrayref, arrayset, arraysize,
+    # arrayref, arrayset, arraysize,
     # _apply, kwcall,
     # sizeof    # not exported, to avoid conflicting with Base.sizeof
     # type reflection
@@ -174,7 +174,7 @@ export
     #mul_int, ne_float, ne_int, neg_float, neg_int, not_int, or_int, rem_float,
     #sdiv_int, shl_int, sitofp, sle_int, slt_int, smod_int,
     #srem_int, sub_float, sub_int, trunc_int, udiv_int, uitofp,
-    #ule_int, ult_int, unbox, urem_int, xor_int, sext_int, zext_int
+    #ule_int, ult_int, unbox, urem_int, xor_int, sext_int, zext_int, arraylen
 
 
 const (===) = is

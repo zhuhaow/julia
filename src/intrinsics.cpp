@@ -43,7 +43,9 @@ namespace JL_I {
         // pointer access
         pointerref, pointerset,
         // c interface
-        ccall, cglobal, llvmcall
+        ccall, cglobal, llvmcall,
+        // object field access
+        arraylen
     };
 };
 
@@ -822,12 +824,15 @@ static Value *emit_smod(Value *x, Value *den, jl_codectx_t *ctx)
 static Value *emit_untyped_intrinsic(intrinsic f, Value *x, Value *y, Value *z, size_t nargs,
                                        jl_codectx_t *ctx, jl_datatype_t* *newtyp);
 static jl_cgval_t emit_intrinsic(intrinsic f, jl_value_t **args, size_t nargs,
-                                       jl_codectx_t *ctx)
+                                 jl_codectx_t *ctx)
 {
     switch (f) {
     case ccall: return emit_ccall(args, nargs, ctx);
     case cglobal: return emit_cglobal(args, nargs, ctx);
     case llvmcall: return emit_llvmcall(args, nargs, ctx);
+    case arraylen:
+        return mark_julia_type(emit_arraylen(emit_expr(args[1], ctx), args[1], ctx),
+                               jl_long_type);
 
     HANDLE(pointerref,2)
         return emit_pointerref(args[1], args[2], ctx);
@@ -1497,5 +1502,5 @@ extern "C" void jl_init_intrinsic_functions(void)
     ADD_I(check_top_bit);
     ADD_I(nan_dom_err);
     ADD_I(ccall); ADD_I(cglobal);
-    ADD_I(llvmcall);
+    ADD_I(llvmcall); ADD_I(arraylen);
 }

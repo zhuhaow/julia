@@ -1205,7 +1205,6 @@ void jl_init_primitives(void)
     add_builtin_func("nfields", jl_f_nfields);
     add_builtin_func("_expr", jl_f_new_expr);
 
-    add_builtin_func("arraylen", jl_f_arraylen);
     add_builtin_func("arrayref", jl_f_arrayref);
     add_builtin_func("arrayset", jl_f_arrayset);
     add_builtin_func("arraysize", jl_f_arraysize);
