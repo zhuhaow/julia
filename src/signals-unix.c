@@ -186,7 +186,7 @@ void usr2_handler(int sig, siginfo_t *info, void *ctx)
     }
 }
 
-#if defined(HAVE_TIMEDSIGWAIT)
+#if defined(HAVE_SIGTIMEDWAIT)
 
 static struct timespec timeoutprof;
 DLLEXPORT int jl_profile_start_timer(void)
@@ -194,6 +194,12 @@ DLLEXPORT int jl_profile_start_timer(void)
     timeoutprof.tv_sec = nsecprof/GIGA;
     timeoutprof.tv_nsec = nsecprof%GIGA;
     pthread_kill(signals_thread, SIGUSR2); // notify signal handler to start timer
+    return 0;
+}
+
+DLLEXPORT void jl_profile_stop_timer(void)
+{
+    pthread_kill(signals_thread, SIGUSR2);
 }
 
 #elif defined(HAVE_TIMER)
@@ -325,14 +331,14 @@ static void *signal_listener(void *arg)
     int sig, critical, profile;
     int i;
     jl_sigsetset(&sset);
-#if defined(HAVE_TIMEDSIGWAIT)
-    siginfo_t *info;
-    sigaddset(sset, SIGUSR2);
+#ifdef HAVE_SIGTIMEDWAIT
+    siginfo_t info;
+    sigaddset(&sset, SIGUSR2);
     sigprocmask(SIG_SETMASK, &sset, 0);
 #endif
     while (1) {
         profile = 0;
-#if HAVE_TIMEDSIGWAIT
+#ifdef HAVE_SIGTIMEDWAIT
         if (running) {
             sig = sigtimedwait(&sset, &info, &timeoutprof);
         }
@@ -343,7 +349,7 @@ static void *signal_listener(void *arg)
             int err = errno;
             if (err == EAGAIN) {
                 // this was a timeout event
-                profile = true;
+                profile = 1;
             }
             else {
                 assert(err == EINTR);
@@ -351,7 +357,8 @@ static void *signal_listener(void *arg)
             }
         }
         else if (sig == SIGUSR2) {
-            // notification to start profiler
+            // notification to toggle profiler
+            running = !running;
             continue;
         }
 #else
