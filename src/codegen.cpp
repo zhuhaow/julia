@@ -2335,15 +2335,6 @@ static bool emit_known_call(jl_cgval_t *ret, jl_value_t *ff,
         }
     }
 
-    else if (f->fptr == &jl_f_throw && nargs==1) {
-        Value *arg1 = boxed(emit_expr(args[1], ctx), ctx);
-        // emit a "conditional" throw so that codegen does't end up trying to emit code after an "unreachable" terminator
-        raise_exception_unless(ConstantInt::get(T_int1,0), arg1, ctx);
-        *ret = jl_cgval_t();
-        JL_GC_POP();
-        return true;
-    }
-
     else if (f->fptr == &jl_f_arraysize && nargs==2) {
         jl_value_t *aty = expr_type(args[1], ctx); rt1 = aty;
         jl_value_t *ity = expr_type(args[2], ctx); rt2 = ity;
@@ -2369,13 +2360,13 @@ static bool emit_known_call(jl_cgval_t *ret, jl_value_t *ff,
                     Value *idx = emit_unbox(T_size,
                                             emit_unboxed(args[2], ctx), ity);
                     error_unless(builder.CreateICmpSGT(idx,
-                                                      ConstantInt::get(T_size,0)),
+                                                       ConstantInt::get(T_size,0)),
                                  "arraysize: dimension out of range", ctx);
                     BasicBlock *outBB = BasicBlock::Create(getGlobalContext(),"outofrange",ctx->f);
                     BasicBlock *inBB = BasicBlock::Create(getGlobalContext(),"inrange");
                     BasicBlock *ansBB = BasicBlock::Create(getGlobalContext(),"arraysize");
                     builder.CreateCondBr(builder.CreateICmpSLE(idx,
-                                                              ConstantInt::get(T_size, ndims)),
+                                                               ConstantInt::get(T_size, ndims)),
                                          inBB, outBB);
                     builder.SetInsertPoint(outBB);
                     Value *v_one = ConstantInt::get(T_size, 1);
@@ -5458,7 +5449,6 @@ static void init_julia_llvm_env(Module *m)
     builtin_func_map[jl_f_typeassert] = jlcall_func_to_llvm("jl_f_typeassert", (void*)&jl_f_typeassert, m);
     builtin_func_map[jl_f_apply] = jlcall_func_to_llvm("jl_f_apply", (void*)&jl_f_apply, m);
     builtin_func_map[jl_f_kwcall] = jlcall_func_to_llvm("jl_f_kwcall", (void*)&jl_f_kwcall, m);
-    builtin_func_map[jl_f_throw] = jlcall_func_to_llvm("jl_f_throw", (void*)&jl_f_throw, m);
     builtin_func_map[jl_f_tuple] = jlcall_func_to_llvm("jl_f_tuple", (void*)&jl_f_tuple, m);
     builtin_func_map[jl_f_svec] = jlcall_func_to_llvm("jl_f_svec", (void*)&jl_f_svec, m);
     builtin_func_map[jl_f_applicable] = jlcall_func_to_llvm("jl_f_applicable", (void*)&jl_f_applicable, m);

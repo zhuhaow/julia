@@ -9,7 +9,6 @@ extern "C" {
 
 // declarations for julia-callable builtin functions
 
-JL_CALLABLE(jl_f_throw);
 JL_CALLABLE(jl_f_is);
 JL_CALLABLE(jl_f_typeof);
 JL_CALLABLE(jl_f_sizeof);

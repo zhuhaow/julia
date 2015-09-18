@@ -260,6 +260,8 @@ typealias ByteString Union{ASCIIString,UTF8String}
 
 include(fname::ByteString) = ccall(:jl_load_, Any, (Any,), fname)
 
+throw(e::ANY) = ccall(:jl_throw, Union{}, (Any,), e)
+
 eval(e::ANY) = eval(Main, e)
 eval(m::Module, e::ANY) = ccall(:jl_toplevel_eval_in, Any, (Any, Any), m, e)
 

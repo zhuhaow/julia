@@ -178,13 +178,6 @@ DLLEXPORT void NORETURN jl_bounds_error_ints(jl_value_t *v, size_t *idxs, size_t
     jl_throw(jl_new_struct((jl_datatype_t*)jl_boundserror_type, v, t));
 }
 
-JL_CALLABLE(jl_f_throw)
-{
-    JL_NARGS(throw, 1, 1);
-    jl_throw(args[0]);
-    return jl_nothing;
-}
-
 void jl_enter_handler(jl_handler_t *eh)
 {
     JL_SIGATOMIC_BEGIN();
@@ -1189,27 +1182,30 @@ void jl_init_primitives(void)
     add_builtin_func("issubtype", jl_f_subtype);
     add_builtin_func("isa", jl_f_isa);
     add_builtin_func("typeassert", jl_f_typeassert);
-    add_builtin_func("_apply", jl_f_apply);
-    add_builtin_func("kwcall", jl_f_kwcall);
-    add_builtin_func("throw", jl_f_throw);
     add_builtin_func("tuple", jl_f_tuple);
-    add_builtin_func("svec", jl_f_svec);
-    add_builtin_func("applicable", jl_f_applicable);
-    add_builtin_func("invoke", jl_f_invoke);
-    add_builtin_func("isdefined", jl_f_isdefined);
 
-    // functions for internal use
+    // field access
     add_builtin_func("getfield",  jl_f_get_field);
     add_builtin_func("setfield!",  jl_f_set_field);
     add_builtin_func("fieldtype", jl_f_field_type);
     add_builtin_func("nfields", jl_f_nfields);
-    add_builtin_func("_expr", jl_f_new_expr);
+    add_builtin_func("isdefined", jl_f_isdefined);
 
+    // array primitives
     add_builtin_func("arrayref", jl_f_arrayref);
     add_builtin_func("arrayset", jl_f_arrayset);
     add_builtin_func("arraysize", jl_f_arraysize);
 
+    // method table utils
+    add_builtin_func("applicable", jl_f_applicable);
+    add_builtin_func("invoke", jl_f_invoke);
+
+    // internal functions
     add_builtin_func("apply_type", jl_f_instantiate_type);
+    add_builtin_func("_apply", jl_f_apply);
+    add_builtin_func("kwcall", jl_f_kwcall);
+    add_builtin_func("_expr", jl_f_new_expr);
+    add_builtin_func("svec", jl_f_svec);
 
     // builtin types
     add_builtin("Any", (jl_value_t*)jl_any_type);

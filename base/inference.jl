@@ -122,7 +122,6 @@ function add_tfunc(f::Function, minarg::Int, maxarg::Int, tfunc::Function)
     push!(t_ffunc_key, f)
     push!(t_ffunc_val, (minarg, maxarg, tfunc))
 end
-add_tfunc(throw, 1, 1, x->Bottom)
 add_tfunc(box, 2, 2, (t,v)->(isType(t) ? t.parameters[1] : Any))
 add_tfunc(eq_int, 2, 2, cmp_tfunc)
 add_tfunc(ne_int, 2, 2, cmp_tfunc)
