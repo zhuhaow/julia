@@ -167,7 +167,6 @@ add_tfunc(isdefined, 1, IInf, (args...)->Bool)
 add_tfunc(Core.sizeof, 1, 1, x->Int)
 add_tfunc(nfields, 1, 1, x->Int)
 add_tfunc(_expr, 1, IInf, (args...)->Expr)
-add_tfunc(method_exists, 2, 2, cmp_tfunc)
 add_tfunc(applicable, 1, IInf, (f, args...)->Bool)
 add_tfunc(arraylen, 1, 1, x->Int)
 #add_tfunc(arrayref, 2,IInf,(a,i...)->(isa(a,DataType) && a<:Array ?

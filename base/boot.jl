@@ -147,7 +147,7 @@ export
     Expr, GotoNode, LabelNode, LineNumberNode, QuoteNode, SymbolNode, TopNode,
     GlobalRef, NewvarNode, GenSym,
     # object model functions
-    fieldtype, getfield, setfield!, nfields, throw, tuple, is, ===, isdefined,
+    fieldtype, getfield, setfield!, nfields, throw, tuple, is, ===, isdefined, eval,
     # arraylen, arrayref, arrayset, arraysize,
     # _apply, kwcall,
     # sizeof    # not exported, to avoid conflicting with Base.sizeof
@@ -155,7 +155,7 @@ export
     issubtype, typeof, isa,
     # typeassert, apply_type,
     # method reflection
-    applicable, invoke, method_exists,
+    applicable, invoke,
     # constants
     nothing, Main,
     # intrinsics module
@@ -259,6 +259,9 @@ end
 typealias ByteString Union{ASCIIString,UTF8String}
 
 include(fname::ByteString) = ccall(:jl_load_, Any, (Any,), fname)
+
+eval(e::ANY) = eval(Main, e)
+eval(m::Module, e::ANY) = ccall(:jl_toplevel_eval_in, Any, (Any, Any), m, e)
 
 # constructors for built-in types
 
