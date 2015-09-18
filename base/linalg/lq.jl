@@ -26,6 +26,10 @@ end
 
 convert{T}(::Type{LQ{T}},A::LQ) = LQ(convert(AbstractMatrix{T}, A.factors), convert(Vector{T}, A.τ))
 convert{T}(::Type{Factorization{T}}, A::LQ) = convert(LQ{T}, A)
+convert{T}(::Type{QR{T}},A::LQ) = QR(convert(AbstractMatrix{T}, ctranspose(A.factors)), convert(Vector{T},A.τ))
+ctranspose{T}(A::LQ{T}) = QR(convert(AbstractMatrix{T}, ctranspose(A.factors)), convert(Vector{T},A.τ))
+convert{T}(::Type{LQ{T}},A::QR) = LQ(convert(AbstractMatrix{T},ctranspose(A.factors)), convert(Vector{T}, A.τ))
+ctranspose{T}(A::QR{T}) = LQ(convert(AbstractMatrix{T},ctranspose(A.factors)), convert(Vector{T}, A.τ))
 
 function getindex(A::LQ, d::Symbol)
     m, n = size(A)

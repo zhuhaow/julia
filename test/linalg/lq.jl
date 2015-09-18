@@ -44,6 +44,8 @@ debug && println("LQ decomposition")
         for i = 1:2
             let a = i == 1 ? a : sub(a, 1:n - 1, 1:n - 1), b = i == 1 ? b : sub(b, 1:n - 1), n = i == 1 ? n : n - 1
                 lqa   = lqfact(a)
+                @test full(lqa) ≈ full(qrfact(a,Val{false}))
+                @test full(lqa) ≈ full(ctranspose(ctranspose(lqa)))
                 l,q   = lqa[:L], lqa[:Q]
                 @test_throws KeyError lqa[:Z]
                 @test_approx_eq q'*full(q, thin = false) eye(n)
