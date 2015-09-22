@@ -404,7 +404,7 @@ function show_backtrace(io::IO, top_function::Symbol, t::Vector{Any}, set)
 end
 
 # process the backtrace, up to (but not including) top_function
-function process_backtrace(process_func::Function, top_function::Symbol, t, set)
+function process_backtrace(process_func, top_function::Symbol, t, set)
     n = 1
     lastfile = ""; lastline = -11; lastname = symbol("#");
     last_inlinedat_file = ""; last_inlinedat_line = -1
