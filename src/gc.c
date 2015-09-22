@@ -1559,25 +1559,25 @@ NOINLINE static int gc_mark_module(jl_module_t *m, int d)
 
 static void gc_mark_task_stack(jl_task_t *ta, int d)
 {
-    if (ta->stkbuf != NULL || ta == jl_current_task || ta == jl_root_task) {
-        if (ta == jl_current_task) {
-            gc_mark_stack((jl_value_t*)ta, jl_pgcstack, 0, d);
-        }
-        else {
-            ptrint_t offset = 0;
+    if (ta == jl_current_task) {
+        gc_mark_stack((jl_value_t*)ta, jl_pgcstack, 0, d);
+    }
+    else if (ta == jl_root_task) {
+        gc_mark_stack((jl_value_t*)ta, ta->gcstack, 0, d);
+    }
+    else if (ta->stkbuf != NULL && ta->stkbuf != (void*)(intptr_t)-1) {
 #ifdef COPY_STACKS
-            if (ta != jl_root_task)
-                offset = (char *)ta->stkbuf + ta->ssize - (char *)jl_stackbase;
+        ptrint_t offset = (char *)ta->stkbuf + ta->ssize - (char *)jl_stackbase;
+#else
+        ptrint_t offset = 0;
 #endif
-            gc_mark_stack((jl_value_t*)ta, ta->gcstack, offset, d);
-        }
+        gc_mark_stack((jl_value_t*)ta, ta->gcstack, offset, d);
     }
 }
 
 NOINLINE static void gc_mark_task(jl_task_t *ta, int d)
 {
     if (ta->parent) gc_push_root(ta->parent, d);
-    if (ta->last) gc_push_root(ta->last, d);
     gc_push_root(ta->tls, d);
     gc_push_root(ta->consumers, d);
     gc_push_root(ta->donenotify, d);

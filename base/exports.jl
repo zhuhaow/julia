@@ -1026,7 +1026,6 @@ export
     Condition,
     consume,
     current_task,
-    istaskstarted,
     istaskdone,
     lock,
     notify,

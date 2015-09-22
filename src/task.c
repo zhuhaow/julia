@@ -253,8 +253,8 @@ static void NORETURN finish_task(jl_task_t *t, jl_value_t *resultval)
 #ifdef COPY_STACKS
     // early free of stkbuf
     void *stkbuf = t->stkbuf;
-    if (stkbuf != NULL) {
-        t->stkbuf = NULL;
+    if (stkbuf != NULL && stkbuf != (void*)(intptr_t*)-1) {
+        t->stkbuf = (void*)(intptr_t)-1;
         free(stkbuf - sizeof(size_t));
     }
 #endif
@@ -344,8 +344,6 @@ static void ctx_switch(jl_task_t *t)
         jl_current_module = last->current_module;
     }
 
-    t->last = jl_current_task;
-    jl_gc_wb(t, t->last);
     jl_current_task = t;
 
 #if defined(_OS_WINDOWS_) && !defined(COPY_STACKS)
@@ -424,9 +422,12 @@ JL_THREAD jl_value_t * volatile jl_task_arg_in_transit;
 extern int jl_in_gc;
 DLLEXPORT jl_value_t *jl_switchto(jl_task_t *t, jl_value_t *arg)
 {
+    if (t == jl_current_task) {
+        throw_if_exception_set(t);
+        return arg;
+    }
     if (t->state == done_sym || t->state == failed_sym ||
-        // task started but stkbuf NULL'd => finish_task ran
-        (t->last != NULL && t->stkbuf == NULL && t != jl_current_task)) {
+        (t->stkbuf == (void*)(intptr_t)-1)) {
         if (t->exception != jl_nothing)
             jl_throw(t->exception);
         return t->result;
@@ -824,7 +825,6 @@ DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)
     t->ssize = ssize;
     t->current_module = NULL;
     t->parent = jl_current_task;
-    t->last = NULL;
     t->tls = jl_nothing;
     t->consumers = jl_nothing;
     t->state = runnable_sym;
@@ -856,8 +856,8 @@ DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)
 static void jl_unprotect_stack(jl_task_t *t)
 {
     void *stk = t->stkbuf;
-    if (stk) {
-        t->stkbuf = NULL;
+    if (stk && stk != (void*)(intptr_t)-1) {
+        t->stkbuf = (void*)(intptr_t)-1;
 #ifdef COPY_STACKS
         free(stk - sizeof(size_t));
 #else
@@ -882,9 +882,8 @@ void jl_init_tasks(void)
     jl_task_type = jl_new_datatype(jl_symbol("Task"),
                                    jl_any_type,
                                    jl_emptysvec,
-                                   jl_svec(10,
+                                   jl_svec(9,
                                             jl_symbol("parent"),
-                                            jl_symbol("last"),
                                             jl_symbol("storage"),
                                             jl_symbol("state"),
                                             jl_symbol("consumers"),
@@ -893,13 +892,13 @@ void jl_init_tasks(void)
                                             jl_symbol("exception"),
                                             jl_symbol("backtrace"),
                                             jl_symbol("code")),
-                                   jl_svec(10,
-                                            jl_any_type, jl_any_type,
+                                   jl_svec(9,
+                                            jl_any_type,
                                             jl_any_type, jl_sym_type,
                                             jl_any_type, jl_any_type,
                                             jl_any_type, jl_any_type,
                                             jl_any_type, jl_function_type),
-                                   0, 1, 0);
+                                   0, 1, 8);
     jl_svecset(jl_task_type->types, 0, (jl_value_t*)jl_task_type);
 
     done_sym = jl_symbol("done");
@@ -975,8 +974,7 @@ void jl_init_root_task(void *stack, size_t ssize)
     jl_current_task->started = 1;
     jl_current_task->parent = jl_current_task;
     jl_current_task->current_module = jl_current_module;
-    jl_current_task->last = jl_current_task;
-    jl_current_task->tls = NULL;
+    jl_current_task->tls = jl_nothing;
     jl_current_task->consumers = jl_nothing;
     jl_current_task->state = runnable_sym;
     jl_current_task->start = NULL;
