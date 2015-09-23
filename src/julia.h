@@ -1386,13 +1386,10 @@ typedef struct _jl_task_t {
     // hidden state:
 #ifdef _OS_WINDOWS_
     LPVOID fiber; // Fiber that this runs on
-    jl_jmp_buf ctx; // saved thread state
-#else
-    unw_context_t ctx; // saved unwind context
 #endif
+    jl_jmp_buf ctx; // saved thread state
     void *stkbuf; // malloc'd memory
-    unsigned ssize; // sizeof the portion of stack used in stkbuf
-    uint8_t started;
+    int ssize; // sizeof the portion of stack used in stkbuf
 
     // current exception handler
     jl_handler_t *eh;

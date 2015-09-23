@@ -87,10 +87,8 @@
 
 // task options ---------------------------------------------------------------
 
-// select an implementation of stack switching.
-// currently only COPY_STACKS is recommended.
+// select whether to enable the COPY_STACKS stack switching optimization
 #define COPY_STACKS
-
 #define JL_STACK_SIZE (8*1024*1024)
 
 // sanitizer defaults ---------------------------------------------------------
