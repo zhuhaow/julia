@@ -1,4 +1,5 @@
 // This file is a part of Julia. License is MIT: http://julialang.org/license
+
 /*
   task.c
   lightweight processes (symmetric coroutines)
@@ -118,12 +119,14 @@ static void *malloc_stack(size_t bufsz)
     return stk;
 }
 
-#ifndef COPY_STACKS
 static void free_stack(void *stkbuf, size_t bufsz)
 {
     munmap(stkbuf, bufsz);
 }
 #endif
+
+#ifndef MINSIGSTKSZ
+#define MINSIGSTKSZ 131072 // 128k
 #endif
 
 static jl_sym_t *done_sym;
@@ -136,7 +139,7 @@ DLLEXPORT JL_THREAD jl_task_t * volatile jl_current_task;
 JL_THREAD jl_task_t *jl_root_task;
 DLLEXPORT JL_THREAD jl_value_t *jl_exception_in_transit;
 DLLEXPORT JL_THREAD jl_gcframe_t *jl_pgcstack = NULL;
-static void jl_new_fiber(jl_task_t *t);
+static void jl_new_fiber(jl_task_t *t, size_t ssize);
 
 #ifdef HAVE_UNW_CONTEXT
 static unw_context_t jl_base_uctx;
@@ -156,7 +159,7 @@ static JL_THREAD LPVOID jl_basefiber;
 
 static void NOINLINE save_stack(jl_task_t *t)
 {
-    if (t->state == done_sym || t->state == failed_sym || t == jl_root_task)
+    if (t->state == done_sym || t->state == failed_sym)
         return;
     volatile char *_x;
     size_t nb = (char*)jl_stackbase - (char*)&_x;
@@ -185,7 +188,7 @@ void NOINLINE NORETURN restore_stack(jl_task_t *t, char *p)
         if ((char*)&_x > _x) {
             p = (char*)alloca((char*)&_x - _x);
         }
-        restore_stack(t, p);
+        restore_stack(t, p); // pass p as a parameter so that the compiler can't avoid the alloca
     }
     assert(t->stkbuf != NULL);
     memcpy(_x, t->stkbuf, t->ssize);
@@ -205,9 +208,9 @@ static void NORETURN finish_task(jl_task_t *t, jl_value_t *resultval)
     t->result = resultval;
     jl_gc_wb(t, t->result);
 #ifdef COPY_STACKS
-    // early free of stkbuf
+    // early free of stkbuf, if we aren't running on it right now
     void *stkbuf = t->stkbuf;
-    if (stkbuf != NULL && stkbuf != (void*)(intptr_t*)-1) {
+    if (t->copy_stack && stkbuf != NULL && stkbuf != (void*)(intptr_t*)-1) {
         t->stkbuf = (void*)(intptr_t)-1;
         free(stkbuf - sizeof(size_t));
     }
@@ -282,47 +285,33 @@ static void ctx_switch(jl_task_t *t)
 
     jl_current_task = t;
 
-#if defined(_OS_WINDOWS_) && !defined(COPY_STACKS)
-    (void)lastt;
-    if (!t->fiber) {
-        LPVOID jl_fiber = CreateFiberEx(t->ssize, t->ssize, FIBER_FLAG_FLOAT_SWITCH, start_fiber, NULL);
-        if (jl_fiber == NULL)
-            jl_error("CreateFiberEx failed");
-        t->fiber = jl_fiber;
-    }
-    SwitchToFiber(t->fiber);
-
-#else
     if (jl_setjmp(lastt->ctx, 0)) return; // store the old context, return when execution resumes here
 
 #ifdef COPY_STACKS
-    if (lastt != jl_root_task) // may need to save the old copy-stack
+    if (lastt->copy_stack) // may need to save the old copy-stack
         save_stack(lastt);
 #endif
 
 #ifdef _OS_WINDOWS_
     if (t->fiber != lastt->fiber) {
         SwitchToFiber(t->fiber);
-        if (jl_current_task == jl_root_task || lastt == jl_current_task)
+#ifdef COPY_STACKS
+        if (!jl_current_task->copy_stack || lastt == jl_current_task)
             return;
+#endif
         t = jl_current_task;
     }
 #endif
 
 #ifdef COPY_STACKS
-    if (t != jl_root_task && t->stkbuf) {
-        // task already exists
-        restore_stack(t, NULL); // resume at jl_setjmp of the other task after restoring the stack (doesn't return)
-    }
-
-#else
-    if (!t->stkbuf) { // task not started yet, jump to start_task
-        jl_new_fiber(t); // (doesn't return)
-    }
+    if (t->copy_stack && t->stkbuf) // task already exists, resume from the copy-stack
+        restore_stack(t, lastt->copy_stack ? NULL : (void*)(intptr_t)1); // resume at jl_setjmp of the other task after restoring the stack (doesn't return)
 #endif
+
+    if (!t->copy_stack && !t->stkbuf) // task not started yet, jump to start_task
+        jl_new_fiber(t, t->ssize); // (doesn't return)
 
     jl_longjmp(t->ctx, 1); // resume at jl_setjmp of the other task (doesn't return)
-#endif
 //JL_SIGATOMIC_END();
 }
 
@@ -717,7 +706,7 @@ DLLEXPORT void jl_throw_with_superfluous_argument(jl_value_t *e, int line)
     jl_throw(e);
 }
 
-jl_value_t *jl_unprotect_stack_func;
+jl_value_t *jl_task_cleanup_func;
 
 DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)
 {
@@ -728,7 +717,11 @@ DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)
     if (ssize == 0) // unspecified -- pick some default size
         ssize = JL_STACK_SIZE;
 #endif
-    ssize = LLT_ALIGN(ssize, pagesz);
+    if (ssize != 0) {
+        if (ssize < MINSIGSTKSZ)
+            ssize = MINSIGSTKSZ;
+        ssize = LLT_ALIGN(ssize, pagesz);
+    }
     t->ssize = ssize;
     t->current_module = NULL;
     t->parent = jl_current_task;
@@ -744,36 +737,40 @@ DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)
     t->eh = NULL;
     t->gcstack = NULL;
     t->stkbuf = NULL;
-#ifdef COPY_STACKS
-    memcpy(&t->ctx, &jl_basectx, sizeof(t->ctx));
-#elif JL_DEBUG
-    memset(&t->ctx, 0, sizeof(t->ctx));
+    t->copy_stack = (ssize == 0);
+#if defined(JL_DEBUG_BUILD)
+    if (!t->copy_stack)
+        memset(&t->ctx, 0, sizeof(t->ctx));
 #endif
-#ifdef _OS_WINDOWS_
 #ifdef COPY_STACKS
-    t->fiber = jl_basefiber;
-#else
+    if (t->copy_stack)
+        memcpy(&t->ctx, &jl_basectx, sizeof(t->ctx));
+#endif
+
+#ifdef _OS_WINDOWS_
     t->fiber = NULL;
+#ifdef COPY_STACKS
+    if (t->copy_stack)
+        t->fiber = jl_basefiber;
 #endif
 #endif
 
-    jl_gc_add_finalizer((jl_value_t*)t, (jl_function_t*)jl_unprotect_stack_func);
+    jl_gc_add_finalizer((jl_value_t*)t, (jl_function_t*)jl_task_cleanup_func);
     return t;
 }
 
-static void jl_unprotect_stack(jl_task_t *t)
+static void jl_task_cleanup(jl_task_t *t)
 {
     void *stk = t->stkbuf;
     if (stk && stk != (void*)(intptr_t)-1) {
         t->stkbuf = (void*)(intptr_t)-1;
-#ifdef COPY_STACKS
-        free(stk - sizeof(size_t));
-#else
+        if (t->copy_stack)
+            free(stk - sizeof(size_t));
+        else
 #ifdef _OS_WINDOWS_
-        DeleteFiber(t->fiber);
+            DeleteFiber(t->fiber);
 #else
-        free_stack(stk, t->ssize);
-#endif
+            free_stack(stk, t->ssize);
 #endif
     }
 }
@@ -813,23 +810,32 @@ void jl_init_tasks(void)
     failed_sym = jl_symbol("failed");
     runnable_sym = jl_symbol("runnable");
 
-    jl_unprotect_stack_func = jl_box_voidpointer(&jl_unprotect_stack);
+    jl_task_cleanup_func = jl_box_voidpointer(&jl_task_cleanup);
 }
 
 
 #ifdef _OS_WINDOWS_
-static VOID NOINLINE NORETURN CALLBACK start_fiber(PVOID lpParameter)
-{
 #ifdef COPY_STACKS
+static VOID NOINLINE NORETURN CALLBACK start_basefiber(PVOID lpParameter)
+{
     jl_stackbase = &lpParameter;
     if (jl_setjmp(jl_basectx, 0))
         start_task();
     SwitchToFiber(jl_current_task->fiber);
     start_task();
-#else
+}
+#endif
+static VOID NOINLINE NORETURN CALLBACK start_fiber(PVOID lpParameter)
+{
     jl_current_task->stkbuf = &lpParameter;
     start_task();
-#endif
+}
+static void jl_new_fiber(jl_task_t *t, size_t ssize)
+{
+    LPVOID jl_fiber = CreateFiberEx(ssize, ssize, FIBER_FLAG_FLOAT_SWITCH, start_fiber, NULL);
+    if (jl_fiber == NULL)
+        jl_error("CreateFiberEx failed");
+    t->fiber = jl_fiber;
 }
 static void jl_init_basefiber(size_t ssize)
 {
@@ -837,7 +843,7 @@ static void jl_init_basefiber(size_t ssize)
     if (jl_current_task->fiber == NULL)
         jl_error("ConvertThreadToFiberEx failed");
 #ifdef COPY_STACKS
-    jl_basefiber = CreateFiberEx(ssize, ssize, FIBER_FLAG_FLOAT_SWITCH, start_fiber, NULL);
+    jl_basefiber = CreateFiberEx(ssize, ssize, FIBER_FLAG_FLOAT_SWITCH, start_basefiber, NULL);
     if (jl_basefiber == NULL)
         jl_error("CreateFiberEx failed");
     SwitchToFiber(jl_basefiber); /* initializes jl_stackbase and jl_basectx */
@@ -855,9 +861,8 @@ static void start_basefiber()
     abort(); // function not used
 #endif
 }
-static void jl_new_fiber(jl_task_t *t)
+static void jl_new_fiber(jl_task_t *t, size_t ssize)
 {
-    size_t ssize = t->ssize;
     char *stk = malloc_stack(ssize);
     jl_base_uctx.uc_stack.ss_sp = stk;
     jl_base_uctx.uc_stack.ss_size = ssize;
@@ -882,10 +887,7 @@ static void jl_init_basefiber(size_t ssize)
     if (r != 0)
         jl_error("getcontext failed");
 #ifdef COPY_STACKS
-    size_t oldssize = jl_root_task->ssize;
-    jl_root_task->ssize = ssize;
-    jl_new_fiber(jl_root_task);
-    jl_root_task->ssize = oldssize;
+    jl_new_fiber(jl_root_task, ssize);
 #endif
 }
 #endif
@@ -913,9 +915,8 @@ static void start_basefiber()
 #else
 #error please define how to simulate a CALL on this platform
 #endif
-static void jl_new_fiber(jl_task_t *t)
+static void jl_new_fiber(jl_task_t *t, size_t ssize)
 {
-    size_t ssize = t->ssize;
     char *stkbuf = malloc_stack(ssize);
     char *stk = stkbuf;
     stk += ssize;
@@ -945,13 +946,8 @@ static void jl_init_basefiber(size_t ssize)
     if (r != 0)
         jl_error("unw_init_local failed");
 #ifdef COPY_STACKS
-    size_t oldssize = jl_root_task->ssize;
-    if (jl_setjmp(jl_root_task->ctx, 0)) {
-        jl_root_task->ssize = oldssize;
-        return;
-    }
-    jl_root_task->ssize = ssize;
-    jl_new_fiber(jl_root_task); // (doesn't return)
+    if (jl_setjmp(jl_root_task->ctx, 0)) return;
+    jl_new_fiber(jl_root_task, ssize); // (doesn't return)
 #endif
 }
 #endif
@@ -967,9 +963,8 @@ static void start_basefiber()
     abort(); // function not used
 #endif
 }
-static void jl_new_fiber(jl_task_t *t)
+static void jl_new_fiber(jl_task_t *t, size_t ssize)
 {
-    size_t ssize = t->ssize;
     char *stkbuf = malloc_stack(ssize);
     char *stk = stkbuf;
     stk += ssize;
@@ -1011,13 +1006,8 @@ static void jl_new_fiber(jl_task_t *t)
 static void jl_init_basefiber(size_t ssize)
 {
 #ifdef COPY_STACKS
-    size_t oldssize = jl_root_task->ssize;
-    if (jl_setjmp(jl_root_task->ctx, 0)) {
-        jl_root_task->ssize = oldssize;
-        return;
-    }
-    jl_root_task->ssize = ssize;
-    jl_new_fiber(jl_root_task); // (doesn't return)
+    if (jl_setjmp(jl_root_task->ctx, 0)) return;
+    jl_new_fiber(jl_root_task, ssize); // (doesn't return)
 #endif
 }
 #endif
@@ -1028,12 +1018,11 @@ static void start_fiber()
     if (jl_setjmp(jl_current_task->ctx, 0))
         start_task();
 }
-static void jl_new_fiber(jl_task_t *t)
+static void jl_new_fiber(jl_task_t *t, size_t ssize)
 {
     stack_t uc_stack, osigstk;
     struct sigaction sa, osa;
     sigset_t set, oset;
-    size_t ssize = t->ssize;
     char *stk = malloc_stack(ssize);
     // setup
     sigfillset(&set);
@@ -1073,10 +1062,7 @@ static void jl_new_fiber(jl_task_t *t)
 static void jl_init_basefiber(size_t ssize)
 {
 #ifdef COPY_STACKS
-    size_t oldssize = jl_root_task->ssize;
-    jl_root_task->ssize = ssize;
-    jl_new_fiber(jl_root_task);
-    jl_root_task->ssize = oldssize;
+    jl_new_fiber(jl_root_task, ssize);
     memcpy(jl_basectx, jl_current_task->ctx, sizeof(jl_basectx));
 #endif
 }
@@ -1088,13 +1074,9 @@ void jl_init_root_task(void *stack, size_t ssize)
     jl_current_task = (jl_task_t*)jl_gc_allocobj(sizeof(jl_task_t));
     jl_set_typeof(jl_current_task, jl_task_type);
 
-#ifdef COPY_STACKS
-    jl_current_task->stkbuf = NULL; // address of stack save location
-    jl_current_task->ssize = 0; // size of saved piece
-#else
-    jl_current_task->stkbuf = stack - ssize; // address of bottom of stack
-    jl_current_task->ssize = ssize; // sizeof stack
-#endif
+    jl_current_task->copy_stack = 0;
+    jl_current_task->stkbuf = stack - ssize - 3000000; // guess at address of bottom of stack
+    jl_current_task->ssize = ssize + 3000000; // guess at sizeof stack
     jl_current_task->parent = jl_current_task;
     jl_current_task->current_module = jl_current_module;
     jl_current_task->tls = jl_nothing;

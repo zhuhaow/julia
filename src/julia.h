@@ -1389,7 +1389,8 @@ typedef struct _jl_task_t {
 #endif
     jl_jmp_buf ctx; // saved thread state
     void *stkbuf; // malloc'd memory
-    int ssize; // sizeof the portion of stack used in stkbuf
+    int ssize:31; // sizeof stkbuf
+    int copy_stack:1;
 
     // current exception handler
     jl_handler_t *eh;

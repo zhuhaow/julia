@@ -298,7 +298,7 @@ eval(:(Core.call(::Type{GlobalRef}, m::Module, s::Symbol) = $(Expr(:new, :Global
 
 Module(name::Symbol=:anonymous, std_imports::Bool=true) = ccall(:jl_f_new_module, Any, (Any, Bool), name, std_imports)::Module
 
-Task(f::ANY) = ccall(:jl_new_task, Any, (Any, Int), f::Function, 0)::Task
+Task(f::ANY, reserved_stack::Int) = ccall(:jl_new_task, Any, (Any, Int), f::Function, reserved_stack)::Task
 
 # simple convert for use by constructors of types in Core
 # note that there is no actual conversion defined here,
