@@ -608,7 +608,6 @@ static jl_cgval_t emit_runtime_pointerref(jl_value_t *e, jl_value_t *i, jl_codec
     Value *preffunc = // TODO: move this to the codegen initialization code section
         jl_Module->getOrInsertFunction("jl_pointerref",
                                        FunctionType::get(T_pjlvalue, two_pvalue_llvmt, false));
-    int ldepth = ctx->gc.argDepth;
     jl_cgval_t parg = emit_boxed_rooted(e, ctx);
     Value *iarg = boxed(emit_expr(i, ctx), ctx);
 #ifdef LLVM37
@@ -616,7 +615,6 @@ static jl_cgval_t emit_runtime_pointerref(jl_value_t *e, jl_value_t *i, jl_codec
 #else
     Value *ret = builder.CreateCall2(prepare_call(preffunc), parg.V, iarg);
 #endif
-    ctx->gc.argDepth = ldepth;
     jl_value_t *ety;
     if (jl_is_cpointer_type(parg.typ)) {
         ety = jl_tparam0(parg.typ);
@@ -676,7 +674,6 @@ static jl_cgval_t emit_runtime_pointerset(jl_value_t *e, jl_value_t *x, jl_value
     Value *psetfunc = // TODO: move this to the codegen initialization code section
         jl_Module->getOrInsertFunction("jl_pointerset",
                                        FunctionType::get(T_void, three_pvalue_llvmt, false));
-    int ldepth = ctx->gc.argDepth;
     jl_cgval_t parg = emit_boxed_rooted(e, ctx);
     Value *iarg = emit_boxed_rooted(i, ctx).V;
     Value *xarg = boxed(emit_expr(x, ctx), ctx);
@@ -685,7 +682,6 @@ static jl_cgval_t emit_runtime_pointerset(jl_value_t *e, jl_value_t *x, jl_value
 #else
     builder.CreateCall3(prepare_call(psetfunc), parg.V, xarg, iarg);
 #endif
-    ctx->gc.argDepth = ldepth;
     return parg;
 }
 
@@ -972,13 +968,11 @@ static jl_cgval_t emit_intrinsic(intrinsic f, jl_value_t **args, size_t nargs,
             return mark_julia_type(ifelse_result, false, t2);
         }
         else {
-            int argStart = ctx->gc.argDepth;
             Value *arg1 = boxed(emit_expr(args[2],ctx,false), ctx, expr_type(args[2],ctx));
             // TODO: if (!arg1.isboxed || arg1.needsgcroot)
-                make_gcroot(arg1, ctx);
+                make_gcrooted(arg1, ctx);
             Value *arg2 = boxed(emit_expr(args[3],ctx,false), ctx, expr_type(args[3],ctx));
             ifelse_result = builder.CreateSelect(isfalse, arg2, arg1);
-            ctx->gc.argDepth = argStart;
             jl_value_t *jt = (t1 == t2 ? t1 : (jl_value_t*)jl_any_type);
             return mark_julia_type(ifelse_result, true, jt);
         }

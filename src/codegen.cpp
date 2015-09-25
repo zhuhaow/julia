@@ -507,7 +507,6 @@ struct jl_gcinfo_t {
     AllocaInst *gcframe;
     Value *argSlot;
     GetElementPtrInst *tempSlot;
-    int argDepth;
     int maxDepth;
     int argSpaceSize;
     BasicBlock::iterator first_gcframe_inst;
@@ -561,7 +560,8 @@ static jl_cgval_t emit_expr(jl_value_t *expr, jl_codectx_t *ctx, bool boxed=true
 static jl_cgval_t emit_unboxed(jl_value_t *e, jl_codectx_t *ctx);
 static int is_global(jl_sym_t *s, jl_codectx_t *ctx);
 
-static Value *make_gcroot(Value *v, jl_codectx_t *ctx);
+static void make_gcrooted(Value *v, jl_codectx_t *ctx);
+static Value *make_jlcall(ArrayRef<const jl_cgval_t*> args, jl_codectx_t *ctx);
 static jl_cgval_t emit_boxed_rooted(jl_value_t *e, jl_codectx_t *ctx);
 static Value *global_binding_pointer(jl_module_t *m, jl_sym_t *s,
                                      jl_binding_t **pbnd, bool assign, jl_codectx_t *ctx);
@@ -1750,26 +1750,51 @@ static Value*
 emit_local_slot(int slot, jl_codectx_t *ctx)
 {
     Value *idx = ConstantInt::get(T_int32, slot);
-    return builder.CreateGEP(ctx->gc.argSlot, idx);
+    GetElementPtrInst *newroot = GetElementPtrInst::Create(ctx->gc.argSlot, idx);
+    newroot->insertAfter(ctx->gc.last_gcframe_inst); // insert it into the gc frame basic block so it can be reused as needed
+    return newroot;
 }
 
-// Emit GEP for the @slot-th temporary variable in the GC frame.
-// The temporary variables are after all local variables in the GC frame.
-static Value*
-emit_temp_slot(int slot, jl_codectx_t *ctx)
+static void make_gcrooted(Value *v, jl_codectx_t *ctx) // TODO: this function should be removed
 {
-    Value *idx = ConstantInt::get(T_int32, slot);
-    return builder.CreateGEP(ctx->gc.tempSlot, idx);
+    Instruction *Inst = dyn_cast<Instruction>(v);
+    if (Inst) { // ignore make_gcrooted(Constant) -- TODO: make this an error
+        Value *froot = emit_local_slot(ctx->gc.argSpaceSize++, ctx);
+        StoreInst *store = new StoreInst(Inst, froot);
+        store->insertAfter(Inst);
+    }
 }
 
-static Value *make_gcroot(Value *v, jl_codectx_t *ctx)
+static Value *get_gcrooted(const jl_cgval_t &v, jl_codectx_t *ctx)
 {
-    Value *froot = emit_temp_slot(ctx->gc.argDepth, ctx);
-    builder.CreateStore(v, froot);
-    ctx->gc.argDepth++;
-    if (ctx->gc.argDepth > ctx->gc.maxDepth)
-        ctx->gc.maxDepth = ctx->gc.argDepth;
-    return froot;
+    Value *I = boxed(v, ctx);
+    if ((!v.isboxed || v.needsgcroot) && !v.isghost) {
+        Instruction *Inst = dyn_cast<Instruction>(I);
+        if (Inst) { // ignore make_gcrooted(Constant) -- TODO: make this an error
+            Value *froot = emit_local_slot(ctx->gc.argSpaceSize++, ctx);
+            StoreInst *store = new StoreInst(Inst, froot);
+            store->insertAfter(Inst);
+            return builder.CreateLoad(froot);
+        }
+    }
+    return I;
+}
+
+// turn an array of arguments into a single object suitable for passing to a jlcall
+static Value *make_jlcall(ArrayRef<const jl_cgval_t*> args, jl_codectx_t *ctx)
+{
+    // the temporary variables are after all local variables in the GC frame.
+    Value *largs = ctx->gc.tempSlot;
+    int slot = 0;
+    for (ArrayRef<const jl_cgval_t*>::iterator I = args.begin(), E = args.end(); I < E; ++I, ++slot) {
+        Value *arg = get_gcrooted(**I, ctx);
+        Value *idx = ConstantInt::get(T_int32, slot);
+        Value *newroot = builder.CreateGEP(largs, idx);
+        builder.CreateStore(arg, newroot);
+    }
+    if (slot > ctx->gc.maxDepth)
+        ctx->gc.maxDepth = slot;
+    return largs;
 }
 
 // test whether getting a field from the given type using the given
@@ -1846,11 +1871,11 @@ static jl_cgval_t emit_boxed_rooted(jl_value_t *e, jl_codectx_t *ctx) // TODO: m
     jl_cgval_t v = emit_expr(e, ctx);
     if (!v.isboxed) {
         Value *vbox = boxed(v, ctx);
-        make_gcroot(vbox, ctx);
+        make_gcrooted(vbox, ctx);
         v = jl_cgval_t(vbox, true, v.typ); // XXX: bypasses the normal auto-unbox behavior for isghost!
     }
     else if (might_need_root(e)) { // TODO: v.needsgcroot
-        make_gcroot(v.V, ctx);
+        make_gcrooted(v.V, ctx);
     }
     return v;
 }
@@ -1898,7 +1923,6 @@ static Value *emit_lambda_closure(jl_value_t *expr, jl_codectx_t *ctx)
         return literal_pointer_val(fun);
     }
 
-    int argStart = ctx->gc.argDepth;
     size_t clen = jl_array_dim0(capt);
     Value **captured = (Value**) alloca((1 + clen) * sizeof(Value*));
     captured[0] = ConstantInt::get(T_size, clen);
@@ -1914,16 +1938,13 @@ static Value *emit_lambda_closure(jl_value_t *expr, jl_codectx_t *ctx)
         }
         else {
             assert(!vari.isAssigned || vari.value.isghost); // make sure there wasn't an inference / codegen error earlier
-            val = boxed(vari.value, ctx);
-            if (!vari.value.isghost)
-                make_gcroot(val, ctx);
+            val = get_gcrooted(vari.value, ctx);
         }
         captured[i+1] = val;
     }
     Value *env_tuple = builder.CreateCall(prepare_call(jlnsvec_func),
-                                   ArrayRef<Value*>(&captured[0], 1+clen));
-    ctx->gc.argDepth = argStart; // remove arguments roots from the implicit gc stack
-    make_gcroot(env_tuple, ctx);
+                                   ArrayRef<Value*>(&captured[0], 1+clen)); // TODO: convert to make_jlcall
+    make_gcrooted(env_tuple, ctx);
 #ifdef LLVM37
     Value *result = builder.CreateCall(prepare_call(jlclosure_func),
                                         {Constant::getNullValue(T_pint8),
@@ -1933,7 +1954,6 @@ static Value *emit_lambda_closure(jl_value_t *expr, jl_codectx_t *ctx)
                                         Constant::getNullValue(T_pint8),
                                         env_tuple, literal_pointer_val(expr));
 #endif
-    ctx->gc.argDepth--; // pop env_tuple from the implicit gc stack
     return result;
 }
 
@@ -1996,13 +2016,11 @@ static jl_cgval_t emit_getfield(jl_value_t *expr, jl_sym_t *name, jl_codectx_t *
     // TODO: attempt better codegen for approximate types, if the types
     // and offsets of some fields are independent of parameters.
 
-    int argStart = ctx->gc.argDepth;
-    Value *arg1 = boxed(emit_expr(expr,ctx), ctx, expr_type(expr,ctx));
     // TODO: generic getfield func with more efficient calling convention
-    make_gcroot(arg1, ctx);
-    Value *arg2 = literal_pointer_val((jl_value_t*)name);
-    make_gcroot(arg2, ctx);
-    Value *myargs = emit_temp_slot(argStart, ctx);
+    jl_cgval_t arg1 = emit_expr(expr, ctx);
+    jl_cgval_t arg2 = mark_julia_const((jl_value_t*)name);
+    const jl_cgval_t* myargs_array[2] = {&arg1, &arg2};
+    Value *myargs = make_jlcall(makeArrayRef(myargs_array), ctx);
 #ifdef LLVM37
     Value *result = builder.CreateCall(prepare_call(jlgetfield_func), {V_null, myargs,
                                         ConstantInt::get(T_int32,2)});
@@ -2010,7 +2028,6 @@ static jl_cgval_t emit_getfield(jl_value_t *expr, jl_sym_t *name, jl_codectx_t *
     Value *result = builder.CreateCall3(prepare_call(jlgetfield_func), V_null, myargs,
                                         ConstantInt::get(T_int32,2));
 #endif
-    ctx->gc.argDepth = argStart;
     return mark_julia_type(result, true, jl_any_type); // (typ will be patched up by caller)
 }
 
@@ -2133,10 +2150,10 @@ static Value *emit_f_is(const jl_cgval_t &arg1, const jl_cgval_t &arg2, jl_codec
     }
 
     if (arg2.isboxed && arg2.needsgcroot)
-        make_gcroot(arg2.V, ctx);
+        make_gcrooted(arg2.V, ctx);
     Value *varg1 = boxed(arg1, ctx);
     if (!arg1.isboxed)
-        make_gcroot(varg1, ctx);
+        make_gcrooted(varg1, ctx);
     Value *varg2 = boxed(arg2, ctx); // unrooted!
 #ifdef LLVM37
     return builder.CreateTrunc(builder.CreateCall(prepare_call(jlegal_func), {varg1, varg2}), T_int1);
@@ -2206,10 +2223,9 @@ static bool emit_known_call(jl_cgval_t *ret, jl_value_t *ff,
             }
         }
         // emit values
-        int last_depth = ctx->gc.argDepth;
         jl_cgval_t v1 = emit_unboxed(args[1], ctx);
         if (v1.isboxed && v1.needsgcroot && might_need_root(args[1]))
-            make_gcroot(v1.V, ctx);
+            make_gcrooted(v1.V, ctx);
         jl_cgval_t v2 = emit_unboxed(args[2], ctx); // unrooted!
         // FIXME: v.typ is roughly equiv. to expr_type, but with typeof(T) == Type{T} instead of DataType in a few cases
         if (v1.typ == (jl_value_t*)jl_datatype_type)
@@ -2218,7 +2234,6 @@ static bool emit_known_call(jl_cgval_t *ret, jl_value_t *ff,
             v2 = remark_julia_type(v2, expr_type(args[2], ctx)); // patch up typ if necessary
         // emit comparison test
         Value *ans = emit_f_is(v1, v2, ctx);
-        ctx->gc.argDepth = last_depth;
         *ret = mark_julia_type(ans, false, jl_bool_type);
         JL_GC_POP();
         return true;
@@ -2260,14 +2275,12 @@ static bool emit_known_call(jl_cgval_t *ret, jl_value_t *ff,
         if (jl_subtype(ty, (jl_value_t*)jl_type_type, 0)) {
             FunctionType *ft = FunctionType::get(T_void, two_pvalue_llvmt, false); // TODO: move this to the codegen init section
             Value *typeassert = jl_Module->getOrInsertFunction("jl_typeassert", ft);
-            int ldepth = ctx->gc.argDepth;
             *ret = emit_boxed_rooted(args[1], ctx);
 #ifdef LLVM37
             builder.CreateCall(prepare_call(typeassert), {ret->V, boxed(emit_expr(args[2], ctx),ctx)});
 #else
             builder.CreateCall2(prepare_call(typeassert), ret->V, boxed(emit_expr(args[2], ctx),ctx));
 #endif
-            ctx->gc.argDepth = ldepth;
             JL_GC_POP();
             return true;
         }
@@ -2711,15 +2724,24 @@ static bool emit_known_call(jl_cgval_t *ret, jl_value_t *ff,
     return false;
 }
 
-static Value *emit_jlcall(Value *theFptr, Value *theF, int argStart,
+static Value *emit_jlcall(Value *theFptr, Value *theF, jl_value_t **args,
                           size_t nargs, jl_codectx_t *ctx)
 {
-    // call
+    // emit arguments
     Value *myargs;
-    if (nargs > 0)
-        myargs = emit_temp_slot(argStart, ctx);
-    else
+    if (nargs > 0) {
+        jl_cgval_t *anArg = (jl_cgval_t*)alloca(sizeof(jl_cgval_t) * nargs);
+        const jl_cgval_t **largs = (const jl_cgval_t**)alloca(sizeof(jl_cgval_t*) * nargs);
+        for(size_t i=0; i < nargs; i++) {
+            anArg[i] = emit_expr(args[i], ctx, true, true);
+            largs[i] = &anArg[i];
+        }
+        // put into argument space
+        myargs = make_jlcall(makeArrayRef(largs, nargs), ctx);
+    }
+    else {
         myargs = Constant::getNullValue(T_ppjlvalue);
+    }
 #ifdef LLVM37
     Value *result = builder.CreateCall(prepare_call(theFptr), {theF, myargs,
                                         ConstantInt::get(T_int32,nargs)});
@@ -2727,21 +2749,7 @@ static Value *emit_jlcall(Value *theFptr, Value *theF, int argStart,
     Value *result = builder.CreateCall3(prepare_call(theFptr), theF, myargs,
                                         ConstantInt::get(T_int32,nargs));
 #endif
-    ctx->gc.argDepth = argStart; // clear the args from the gcstack
     return result;
-}
-
-static Value *emit_jlcall(Value *theFptr, Value *theF, jl_value_t **args,
-                          size_t nargs, jl_codectx_t *ctx)
-{
-    // emit arguments
-    int argStart = ctx->gc.argDepth;
-    for(size_t i=0; i < nargs; i++) {
-        jl_cgval_t anArg = emit_expr(args[i], ctx, true, true);
-        // put into argument space
-        make_gcroot(boxed(anArg, ctx, expr_type(args[i],ctx)), ctx);
-    }
-    return emit_jlcall(theFptr, theF, argStart, nargs, ctx);
 }
 
 static jl_cgval_t emit_call_function_object(jl_function_t *f, Value *theF, Value *theFptr,
@@ -2785,7 +2793,7 @@ static jl_cgval_t emit_call_function_object(jl_function_t *f, Value *theF, Value
                 // the value rooted if it was already, to avoid redundant stores.
                 if (!origval.isboxed ||
                     (might_need_root(args[i+1]) && !is_stable_expr(args[i+1], ctx))) {
-                    make_gcroot(argvals[idx], ctx);
+                    make_gcrooted(argvals[idx], ctx);
                 }
             }
             else if (et->isAggregateType()) {
@@ -2866,8 +2874,6 @@ static jl_cgval_t emit_call(jl_value_t **args, size_t arglen, jl_codectx_t *ctx,
 
     assert(!(definitely_function && definitely_not_function));
 
-    int last_depth = ctx->gc.argDepth;
-
     if (definitely_not_function) {
         f = jl_module_call_func(ctx->module);
         bool handled = emit_known_call(NULL, (jl_value_t*)f, args-1, nargs+1, ctx, &theFptr, &f, expr);
@@ -2896,7 +2902,7 @@ static jl_cgval_t emit_call(jl_value_t **args, size_t arglen, jl_codectx_t *ctx,
             if (theFptr == NULL) {
                 Value *theFunc = boxed(emit_expr(args[0], ctx), ctx);
                 if (!headIsGlobal && (jl_is_expr(a0) || jl_is_lambda_info(a0)))
-                    make_gcroot(theFunc, ctx);
+                    make_gcrooted(theFunc, ctx);
                 // extract pieces of the function object
                 // TODO: try extractvalue instead
                 theFptr = emit_nthptr_recast(theFunc, (ssize_t)(offsetof(jl_function_t,fptr)/sizeof(void*)), tbaa_func, jl_pfptr_llvmt);
@@ -2912,14 +2918,18 @@ static jl_cgval_t emit_call(jl_value_t **args, size_t arglen, jl_codectx_t *ctx,
         // either direct function, or use call(), based on run-time branch
 
         // emit "function" and arguments
-        int argStart = ctx->gc.argDepth;
-        Value *theFunc = boxed(emit_expr(args[0], ctx), ctx);
-        make_gcroot(theFunc, ctx);
+        //
+        jl_cgval_t *anArg = (jl_cgval_t*)alloca(sizeof(jl_cgval_t) * (nargs + 1));
+        const jl_cgval_t **largs = (const jl_cgval_t**)alloca(sizeof(jl_cgval_t*) * (nargs + 1));
+        anArg[0] = emit_expr(args[0], ctx);
+        largs[0] = &anArg[0];
         for(size_t i=0; i < nargs; i++) {
-            jl_cgval_t anArg = emit_expr(args[i+1], ctx);
-            // put into argument space
-            make_gcroot(boxed(anArg, ctx, expr_type(args[i+1],ctx)), ctx);
+            anArg[i + 1] = emit_expr(args[i + 1], ctx, true, true);
+            largs[i + 1] = &anArg[i + 1];
         }
+        // put into argument space
+        Value *myargs = make_jlcall(makeArrayRef(largs, nargs + 1), ctx);
+        Value *theFunc = builder.CreateLoad(myargs);
 
         Value *isfunc = emit_is_function(theFunc, ctx);
         BasicBlock *funcBB1 = BasicBlock::Create(getGlobalContext(),"isf", ctx->f);
@@ -2929,24 +2939,23 @@ static jl_cgval_t emit_call(jl_value_t **args, size_t arglen, jl_codectx_t *ctx,
 
         builder.SetInsertPoint(funcBB1);
         // is function
-        Value *myargs;
+        Value *myargs_isfunc;
         if (nargs > 0)
-            myargs = emit_temp_slot(argStart + 1, ctx); // argStart holds theFunc, argStart + 1 holds the start of the argument list
+            myargs_isfunc = builder.CreateGEP(myargs, ConstantInt::get(T_int32, 1)); // argStart holds theFunc, argStart + 1 holds the start of the argument list
         else
-            myargs = Constant::getNullValue(T_ppjlvalue); // no arguments
+            myargs_isfunc = Constant::getNullValue(T_ppjlvalue); // no arguments
         theFptr = emit_nthptr_recast(theFunc, (ssize_t)(offsetof(jl_function_t,fptr)/sizeof(void*)), tbaa_func, jl_pfptr_llvmt);
 #ifdef LLVM37
-        Value *r1 = builder.CreateCall(prepare_call(theFptr), {theFunc, myargs,
+        Value *r1 = builder.CreateCall(prepare_call(theFptr), {theFunc, myargs_isfunc,
                                         ConstantInt::get(T_int32,nargs)});
 #else
-        Value *r1 = builder.CreateCall3(prepare_call(theFptr), theFunc, myargs,
+        Value *r1 = builder.CreateCall3(prepare_call(theFptr), theFunc, myargs_isfunc,
                                         ConstantInt::get(T_int32,nargs));
 #endif
         builder.CreateBr(mergeBB1);
         ctx->f->getBasicBlockList().push_back(elseBB1);
         builder.SetInsertPoint(elseBB1);
         // not function
-        myargs = emit_temp_slot(argStart, ctx);
         jl_value_t *call_func = (jl_value_t*)jl_module_call_func(ctx->module);
         Value *r2;
         if (!jl_is_gf(call_func)) {
@@ -2977,7 +2986,6 @@ static jl_cgval_t emit_call(jl_value_t **args, size_t arglen, jl_codectx_t *ctx,
     if (result.typ == (jl_value_t*)jl_any_type)
         result = remark_julia_type(result, expr_type(expr, ctx)); // patch up typ if necessary
 
-    ctx->gc.argDepth = last_depth; // remove the arguments from the gc stack
     JL_GC_POP();
     return result;
 }
@@ -3162,8 +3170,7 @@ static void emit_assignment(jl_value_t *l, jl_value_t *r, jl_codectx_t *ctx)
             Value *rval = boxed(emit_expr(r, ctx, true), ctx);
             if (!is_stable_expr(r, ctx)) {
                 // add a gc root for this GenSym node
-                Value *bp = emit_local_slot(ctx->gc.argSpaceSize++, ctx);
-                builder.CreateStore(rval, bp);
+                make_gcrooted(rval, ctx);
             }
             slot = mark_julia_type(rval, true, declType);
         }
@@ -3207,9 +3214,7 @@ static void emit_assignment(jl_value_t *l, jl_value_t *r, jl_codectx_t *ctx)
     jl_varinfo_t &vi = ctx->vars[s];
     if (!vi.memloc && !vi.hasGCRoot && vi.used
             && !vi.isArgument && !is_stable_expr(r, ctx)) {
-        Instruction *newroot = cast<Instruction>(emit_local_slot(ctx->gc.argSpaceSize++, ctx));
-        newroot->removeFromParent(); // move it to the gc frame basic block so it can be reused as needed
-        newroot->insertAfter(ctx->gc.last_gcframe_inst);
+        Value *newroot = emit_local_slot(ctx->gc.argSpaceSize++, ctx);
         vi.memloc = newroot;
         vi.hasGCRoot = true; // this has been discovered to need a gc root, add it now
         //TODO: move this logic after the emit_expr
@@ -3459,29 +3464,29 @@ static jl_cgval_t emit_expr(jl_value_t *expr, jl_codectx_t *ctx, bool isboxed, b
     else if (head == method_sym) {
         jl_value_t *mn = args[0];
         bool iskw = false;
-        Value *theF = NULL;
+        Value *bp = NULL;
+        jl_binding_t *bnd = NULL;
+        Value *bp_owner = V_null;
+        jl_cgval_t theF;
         if (jl_is_expr(mn) || jl_is_globalref(mn)) {
             if (jl_is_expr(mn) && ((jl_expr_t*)mn)->head == kw_sym) {
                 iskw = true;
                 mn = jl_exprarg(mn,0);
             }
-            theF = boxed(emit_expr(mn, ctx), ctx);
+            theF = emit_expr(mn, ctx);
             if (!iskw) {
                 mn = jl_fieldref(jl_exprarg(mn, 2), 0);
             }
-        }
-        if (jl_is_symbolnode(mn)) {
-            mn = (jl_value_t*)jl_symbolnode_sym(mn);
-        }
-        assert(jl_is_symbol(mn));
-        int last_depth = ctx->gc.argDepth;
-        Value *name = literal_pointer_val(mn);
-        jl_binding_t *bnd = NULL;
-        Value *bp, *bp_owner = V_null;
-        if (theF != NULL) {
-            bp = make_gcroot(theF, ctx);
+            if (jl_is_symbolnode(mn)) {
+                mn = (jl_value_t*)jl_symbolnode_sym(mn);
+            }
+            assert(jl_is_symbol(mn));
         }
         else {
+            if (jl_is_symbolnode(mn)) {
+                mn = (jl_value_t*)jl_symbolnode_sym(mn);
+            }
+            assert(jl_is_symbol(mn));
             if (is_global((jl_sym_t*)mn, ctx)) {
                 bnd = jl_get_binding_for_method_def(ctx->module, (jl_sym_t*)mn);
                 bp = julia_binding_gv(bnd);
@@ -3498,6 +3503,7 @@ static jl_cgval_t emit_expr(jl_value_t *expr, jl_codectx_t *ctx, bool isboxed, b
                 }
             }
         }
+        Value *name = literal_pointer_val(mn);
         if (jl_expr_nargs(ex) == 1) {
             Value *mdargs[4] = { name, bp, bp_owner, literal_pointer_val(bnd) };
             return mark_julia_type(
@@ -3506,15 +3512,14 @@ static jl_cgval_t emit_expr(jl_value_t *expr, jl_codectx_t *ctx, bool isboxed, b
                     jl_function_type);
         }
         else {
-            Value *a1 = boxed(emit_expr(args[1], ctx),ctx);
-            make_gcroot(a1, ctx);
-            Value *a2 = boxed(emit_expr(args[2], ctx),ctx);
-            make_gcroot(a2, ctx);
+            Value *a1 = get_gcrooted(emit_expr(args[1], ctx), ctx);
+            Value *a2 = get_gcrooted(emit_expr(args[2], ctx), ctx);
+            if (!bp)
+                bp = make_jlcall(ArrayRef<const jl_cgval_t*>(&theF), ctx);
             Value *mdargs[9] =
                 { name, bp, bp_owner, literal_pointer_val(bnd), a1, a2, literal_pointer_val(args[3]),
                   literal_pointer_val((jl_value_t*)jl_module_call_func(ctx->module)),
                   ConstantInt::get(T_int32, (int)iskw) };
-            ctx->gc.argDepth = last_depth;
             return mark_julia_type(
                     builder.CreateCall(prepare_call(jlmethod_func), ArrayRef<Value*>(&mdargs[0], 9)),
                     true,
@@ -3689,7 +3694,6 @@ static void allocate_gc_frame(size_t n_roots, BasicBlock *b0, jl_codectx_t *ctx)
     // allocate a placeholder gc frame
     jl_gcinfo_t *gc = &ctx->gc;
     gc->argSpaceSize = n_roots;
-    gc->argDepth = 0;
     gc->maxDepth = 0;
 
     gc->gcframe = builder.CreateAlloca(T_pjlvalue, ConstantInt::get(T_int32, 0));
@@ -3766,11 +3770,11 @@ static void finalize_gc_frame(jl_codectx_t *ctx)
     builder.CreateStore(newgcframe, prepare_global(jlpgcstack_var));
     // Initialize the slots for temporary variables to NULL
     for (int i = 0; i < gc->argSpaceSize; i++) {
-        Value *argTempi = emit_local_slot(i, ctx);
+        Value *argTempi = builder.CreateGEP(ctx->gc.argSlot, ConstantInt::get(T_int32, i));
         builder.CreateStore(V_null, argTempi);
     }
     for (int i = 0; i < gc->maxDepth; i++) {
-        Value *argTempi = emit_temp_slot(i, ctx);
+        Value *argTempi = builder.CreateGEP(ctx->gc.tempSlot, ConstantInt::get(T_int32, i));
         builder.CreateStore(V_null, argTempi);
     }
     emit_gcpops(ctx);
@@ -3960,14 +3964,15 @@ static Function *gen_cfun_wrapper(jl_function_t *ff, jl_value_t *jlrettype, jl_t
         // figure out how to repack this type
         if (!specsig) {
             Value *arg = boxed(inputarg, &ctx);
-            make_gcroot(arg, &ctx);
+            Value *slot = builder.CreateGEP(ctx.gc.tempSlot, ConstantInt::get(T_int32, FParamIndex++));
+            builder.CreateStore(arg, slot);
         }
         else {
             Value *arg;
             Type *at = theFptr->getFunctionType()->getParamType(FParamIndex++);
             if (isboxed) {
                 arg = boxed(inputarg, &ctx);
-                make_gcroot(arg, &ctx);
+                make_gcrooted(arg, &ctx);
             }
             else {
                 arg = emit_unbox(t, inputarg, jargty);
@@ -3996,7 +4001,22 @@ static Function *gen_cfun_wrapper(jl_function_t *ff, jl_value_t *jlrettype, jl_t
         retval = mark_julia_type(jlfunc_sret ? (Value*)builder.CreateLoad(result) : (Value*)call, retboxed, jlrettype);
     }
     else {
-        Value *ret = emit_jlcall(theFptr, literal_pointer_val((jl_value_t*)ff), 0, nargs, &ctx);
+        // call
+        ctx.gc.maxDepth = FParamIndex;
+        Value *myargs;
+        if (nargs > 0)
+            myargs = ctx.gc.tempSlot;
+        else
+            myargs = Constant::getNullValue(T_ppjlvalue);
+        Value *theF = literal_pointer_val((jl_value_t*)ff);
+#ifdef LLVM37
+        Value *ret = builder.CreateCall(prepare_call(theFptr), {theF, myargs,
+                                            ConstantInt::get(T_int32, nargs)});
+#else
+        Value *ret = builder.CreateCall3(prepare_call(theFptr), theF, myargs,
+                                            ConstantInt::get(T_int32, nargs));
+#endif
+
         retval = mark_julia_type(ret, true, jlrettype);
     }
 
