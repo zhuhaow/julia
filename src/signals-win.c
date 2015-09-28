@@ -77,13 +77,27 @@ void __cdecl crt_sig_handler(int sig, int num)
     }
 }
 
-BOOL (*pSetThreadStackGuarantee)(PULONG);
-void restore_signals(void)
+static JL_THREAD LPVOID collect_backtrace_fiber;
+static JL_THREAD PCONTEXT error_ctx;
+static VOID NOINLINE NORETURN CALLBACK start_backtrace_fiber(PVOID lpParameter)
 {
-    SetConsoleCtrlHandler(NULL, 0); //turn on ctrl-c handler
+    while (1) {
+        // collect the backtrace
+        bt_size = rec_backtrace_ctx(bt_data, MAX_BT_SIZE, error_ctx);
+        // switch back to the execution fiber
+        SwitchToFiber(jl_current_task->fiber);
+    }
 }
 
-void jl_throw_in_ctx(jl_value_t *excpt, CONTEXT *ctxThread, int bt)
+static LONG WINAPI exception_handler(struct _EXCEPTION_POINTERS *ExceptionInfo);
+void restore_signals(void)
+{
+    SetUnhandledExceptionFilter(exception_handler);
+    SetConsoleCtrlHandler(NULL, 0); //turn on ctrl-c handler
+    collect_backtrace_fiber = CreateFiberEx(sig_stack_size, sig_stack_size, FIBER_FLAG_FLOAT_SWITCH, start_backtrace_fiber, NULL);
+}
+
+void jl_throw_in_ctx(jl_value_t *excpt, PCONTEXT ctxThread)
 {
     assert(excpt != NULL);
 #if defined(_CPU_X86_64_)
@@ -93,7 +107,13 @@ void jl_throw_in_ctx(jl_value_t *excpt, CONTEXT *ctxThread, int bt)
 #else
 #error WIN16 not supported :P
 #endif
-    bt_size = bt ? rec_backtrace_ctx(bt_data, MAX_BT_SIZE, ctxThread) : 0;
+    if (excpt != jl_stackovf_exception) {
+        bt_size = rec_backtrace_ctx(bt_data, MAX_BT_SIZE, ctxThread);
+    }
+    else {
+        error_ctx = ctxThread;
+        SwitchToFiber(collect_backtrace_fiber);
+    }
     jl_exception_in_transit = excpt;
 #if defined(_CPU_X86_64_)
     *(DWORD64*)Rsp = 0;
@@ -137,7 +157,7 @@ static BOOL WINAPI sigint_handler(DWORD wsig) //This needs winapi types to guara
             jl_safe_printf("error: GetThreadContext failed\n");
             return 0;
         }
-        jl_throw_in_ctx(jl_interrupt_exception, &ctxThread, 1);
+        jl_throw_in_ctx(jl_interrupt_exception, &ctxThread);
         ctxThread.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
         if (!SetThreadContext(hMainThread,&ctxThread)) {
             jl_safe_printf("error: SetThreadContext failed\n");
@@ -153,20 +173,20 @@ static BOOL WINAPI sigint_handler(DWORD wsig) //This needs winapi types to guara
     return 1;
 }
 
-static LONG WINAPI _exception_handler(struct _EXCEPTION_POINTERS *ExceptionInfo, int in_ctx)
+static LONG WINAPI _exception_handler(struct _EXCEPTION_POINTERS *ExceptionInfo)
 {
     if (ExceptionInfo->ExceptionRecord->ExceptionFlags == 0) {
         switch (ExceptionInfo->ExceptionRecord->ExceptionCode) {
             case EXCEPTION_INT_DIVIDE_BY_ZERO:
                 fpreset();
-                jl_throw_in_ctx(jl_diverror_exception, ExceptionInfo->ContextRecord,in_ctx);
+                jl_throw_in_ctx(jl_diverror_exception, ExceptionInfo->ContextRecord);
                 return EXCEPTION_CONTINUE_EXECUTION;
             case EXCEPTION_STACK_OVERFLOW:
-                jl_throw_in_ctx(jl_stackovf_exception, ExceptionInfo->ContextRecord,in_ctx&&pSetThreadStackGuarantee);
+                jl_throw_in_ctx(jl_stackovf_exception, ExceptionInfo->ContextRecord);
                 return EXCEPTION_CONTINUE_EXECUTION;
             case EXCEPTION_ACCESS_VIOLATION:
                 if (ExceptionInfo->ExceptionRecord->ExceptionInformation[0] == 1) { // writing to read-only memory (e.g. mmap)
-                    jl_throw_in_ctx(jl_readonlymemory_exception, ExceptionInfo->ContextRecord,in_ctx);
+                    jl_throw_in_ctx(jl_readonlymemory_exception, ExceptionInfo->ContextRecord);
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
         }
@@ -230,7 +250,7 @@ static LONG WINAPI _exception_handler(struct _EXCEPTION_POINTERS *ExceptionInfo,
 
 static LONG WINAPI exception_handler(struct _EXCEPTION_POINTERS *ExceptionInfo)
 {
-    return _exception_handler(ExceptionInfo,1);
+    return _exception_handler(ExceptionInfo);
 }
 
 #if defined(_CPU_X86_64_)
@@ -241,7 +261,7 @@ EXCEPTION_DISPOSITION _seh_exception_handler(PEXCEPTION_RECORD ExceptionRecord, 
     ExceptionInfo.ContextRecord = ContextRecord;
 
     EXCEPTION_DISPOSITION rval;
-    switch (_exception_handler(&ExceptionInfo,1)) {
+    switch (_exception_handler(&ExceptionInfo)) {
         case EXCEPTION_CONTINUE_EXECUTION:
             rval = ExceptionContinueExecution; break;
         case EXCEPTION_CONTINUE_SEARCH:
@@ -334,9 +354,6 @@ DLLEXPORT void jl_profile_stop_timer(void)
 
 void jl_install_default_signal_handlers(void)
 {
-    ULONG StackSizeInBytes = sig_stack_size;
-    if (uv_dlsym(jl_kernel32_handle, "SetThreadStackGuarantee", (void**)&pSetThreadStackGuarantee) || !pSetThreadStackGuarantee(&StackSizeInBytes))
-        pSetThreadStackGuarantee = NULL;
     if (signal(SIGFPE, (void (__cdecl *)(int))crt_sig_handler) == SIG_ERR) {
         jl_error("fatal error: Couldn't set SIGFPE");
     }
@@ -352,5 +369,4 @@ void jl_install_default_signal_handlers(void)
     if (signal(SIGTERM, (void (__cdecl *)(int))crt_sig_handler) == SIG_ERR) {
         jl_error("fatal error: Couldn't set SIGTERM");
     }
-    SetUnhandledExceptionFilter(exception_handler);
 }
