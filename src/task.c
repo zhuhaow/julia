@@ -125,8 +125,11 @@ static void free_stack(void *stkbuf, size_t bufsz)
 }
 #endif
 
-#ifndef MINSIGSTKSZ
-#define MINSIGSTKSZ 131072 // 128k
+// emperically, finish_task needs about 64k stack space to infer/run
+#if MINSIGSTKSZ > 65536
+#define MINSTKSZ MINSIGSTKSZ
+#else
+#define MINSTKSZ 65536
 #endif
 
 static jl_sym_t *done_sym;
@@ -702,9 +705,9 @@ DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)
         ssize = JL_STACK_SIZE;
 #endif
     if (ssize != 0) {
-        if (ssize < MINSIGSTKSZ)
-            ssize = MINSIGSTKSZ;
-        ssize = LLT_ALIGN(ssize, pagesz);
+        if (ssize < MINSTKSZ)
+            ssize = MINSTKSZ;
+        ssize = LLT_ALIGN(ssize, pagesz) + pagesz;
     }
     t->ssize = ssize;
     t->current_module = NULL;
