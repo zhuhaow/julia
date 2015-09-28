@@ -234,16 +234,6 @@ static void throw_if_exception_set(jl_task_t *t)
     }
 }
 
-static void NOINLINE NORETURN start_task()
-{
-    // this runs the first time we switch to a task
-    jl_task_t *t = jl_current_task;
-    throw_if_exception_set(t);
-    jl_value_t *res = jl_apply(t->start, NULL, 0);
-    finish_task(t, res);
-    abort();
-}
-
 DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
 {
     _julia_init(rel);
@@ -668,17 +658,11 @@ void NORETURN throw_internal(jl_value_t *e)
         jl_longjmp(jl_current_task->eh->eh_ctx, 1);
     }
     else {
-        if (jl_current_task == jl_root_task) {
-            jl_printf(JL_STDERR, "fatal: error thrown and no exception handler available.\n");
-            jl_static_show(JL_STDERR, e);
-            jl_printf(JL_STDERR, "\n");
-            jlbacktrace();
-            jl_exit(1);
-        }
-        jl_current_task->exception = e;
-        jl_gc_wb(jl_current_task, e);
-        finish_task(jl_current_task, e);
-        assert(0);
+        jl_printf(JL_STDERR, "fatal: error thrown and no exception handler available.\n");
+        jl_static_show(JL_STDERR, e);
+        jl_printf(JL_STDERR, "\n");
+        jlbacktrace();
+        jl_exit(1);
     }
     assert(0);
 }
@@ -813,6 +797,28 @@ void jl_init_tasks(void)
     jl_task_cleanup_func = jl_box_voidpointer(&jl_task_cleanup);
 }
 
+static void NOINLINE NORETURN start_task()
+{
+    // this runs the first time we switch to a task
+    jl_task_t *t = jl_current_task;
+    jl_value_t *res;
+    if (t->exception != NULL && t->exception != jl_nothing) {
+        record_backtrace();
+        res = t->exception;
+    }
+    else {
+        JL_TRY {
+            res = jl_apply(t->start, NULL, 0);
+        }
+        JL_CATCH {
+            res = jl_exception_in_transit;
+            t->exception = res;
+            jl_gc_wb(t, res);
+        }
+    }
+    finish_task(t, res);
+    abort();
+}
 
 #ifdef _OS_WINDOWS_
 #ifdef COPY_STACKS
