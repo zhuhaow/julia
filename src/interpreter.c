@@ -493,6 +493,9 @@ static jl_value_t *eval(jl_value_t *e, jl_value_t **locals, size_t nl, size_t ng
     else if (ex->head == meta_sym) {
         return (jl_value_t*)jl_nothing;
     }
+    else if (ex->head == thunk_sym) {
+        return jl_toplevel_eval((jl_value_t*)ex);
+    }
     jl_errorf("unsupported or misplaced expression %s", ex->head->name);
     return (jl_value_t*)jl_nothing;
 }

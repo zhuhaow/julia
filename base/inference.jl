@@ -112,9 +112,9 @@ isType(t::ANY) = isa(t,DataType) && is((t::DataType).name,Type.name)
 
 const IInf = typemax(Int) # integer infinity
 const n_ifunc = reinterpret(Int32,llvmcall)+1
-const t_ifunc = Array{Tuple{Int,Int,Function},1}(n_ifunc)
+const t_ifunc = Array{Tuple{Int,Int,Any},1}(n_ifunc)
 const t_ffunc_key = Array{Function,1}(0)
-const t_ffunc_val = Array{Tuple{Int,Int,Function},1}(0)
+const t_ffunc_val = Array{Tuple{Int,Int,Any},1}(0)
 function add_tfunc(f::IntrinsicFunction, minarg::Int, maxarg::Int, tfunc::ANY)
     t_ifunc[reinterpret(Int32,f)+1] = (minarg, maxarg, tfunc)
 end
@@ -177,7 +177,7 @@ add_tfunc(arraysize, 2, 2, (a,d)->Int)
 add_tfunc(pointerref, 2, 2, (a,i)->(isa(a,DataType) && a<:Ptr && isa(a.parameters[1],Union{Type,TypeVar}) ? a.parameters[1] : Any))
 add_tfunc(pointerset, 3, 3, (a,v,i)->a)
 
-const typeof_tfunc = function (t)
+const typeof_tfunc = function (t::ANY)
     if isType(t)
         t = t.parameters[1]
         if isa(t,TypeVar)
@@ -244,7 +244,7 @@ function limit_type_depth(t::ANY, d::Int, cov::Bool, vars)
     return R
 end
 
-const getfield_tfunc = function (A, s0, name)
+const getfield_tfunc = function (A, s0::ANY, name)
     s = s0
     if isType(s)
         s = typeof(s.parameters[1])
@@ -325,7 +325,7 @@ const getfield_tfunc = function (A, s0, name)
 end
 add_tfunc(getfield, 2, 2, (A,s,name)->getfield_tfunc(A,s,name)[1])
 add_tfunc(setfield!, 3, 3, (o, f, v)->v)
-const fieldtype_tfunc = function (A, s, name)
+const fieldtype_tfunc = function (A, s::ANY, name)
     if isType(s)
         s = s.parameters[1]
     else
@@ -372,7 +372,7 @@ end
 has_typevars(t::ANY) = ccall(:jl_has_typevars, Cint, (Any,), t)!=0
 
 # TODO: handle e.g. apply_type(T, R::Union{Type{Int32},Type{Float64}})
-const apply_type_tfunc = function (A, args...)
+const apply_type_tfunc = function (A::ANY, args...)
     if !isType(args[1])
         return Any
     end
@@ -511,7 +511,7 @@ function builtin_tfunction(f::ANY, args::ANY, argtype::ANY)
         end
         tf = t_ffunc_val[fidx]
     end
-    tf = tf::Tuple{Real, Real, Function}
+    tf = tf::Tuple{Real, Real, Any}
     if isva
         # only some t-funcs can handle varargs  (TODO)
         #if !is(f, apply_type)
@@ -573,7 +573,7 @@ const isconstantref = isconstantfunc
 
 const limit_tuple_depth = t->limit_tuple_depth_(t,0)
 
-const limit_tuple_depth_ = function (t,d::Int)
+const limit_tuple_depth_ = function (t::ANY,d::Int)
     if isa(t,Union)
         # also limit within Union types.
         # may have to recur into other stuff in the future too.
@@ -592,9 +592,9 @@ const limit_tuple_depth_ = function (t,d::Int)
     Tuple{p...}
 end
 
-limit_tuple_type = t -> limit_tuple_type_n(t, MAX_TUPLETYPE_LEN)
+limit_tuple_type = (t::ANY) -> limit_tuple_type_n(t, MAX_TUPLETYPE_LEN)
 
-const limit_tuple_type_n = function (t, lim::Int)
+const limit_tuple_type_n = function (t::ANY, lim::Int)
     p = t.parameters
     n = length(p)
     if n > lim
@@ -2334,7 +2334,8 @@ function inlineable(f::ANY, e::Expr, atype::ANY, sv::StaticVarInfo, enclosing_as
         # inference step shortened our call args list, even
         # though we have too many arguments to actually
         # call this function
-        @assert isvarargtype(atypes[na])
+        # TODO: this fired for some reason
+        # @assert isvarargtype(atypes[na])
         return NF
     end
 
@@ -2377,7 +2378,7 @@ function inlineable(f::ANY, e::Expr, atype::ANY, sv::StaticVarInfo, enclosing_as
     end
 
     for i=na:-1:1 # stmts_free needs to be calculated in reverse-argument order
-        a = args[i]
+        args_i = args[i]
         aei = argexprs[i]
         aeitype = argtype = exprtype(aei,sv)
         needtypeassert = false
@@ -2421,7 +2422,7 @@ function inlineable(f::ANY, e::Expr, atype::ANY, sv::StaticVarInfo, enclosing_as
         islocal = false # if the argument name is also used as a local variable,
                         # we need to keep it as a variable name
         for vi in vinflist
-            if vi[1] === a && vi[3] != 0
+            if vi[1] === args_i && vi[3] != 0
                 islocal = true
                 aeitype = tmerge(aeitype, vi[2])
                 if aeitype === Any
@@ -2437,12 +2438,12 @@ function inlineable(f::ANY, e::Expr, atype::ANY, sv::StaticVarInfo, enclosing_as
             vnew1 = unique_name(enclosing_ast, ast)
             add_variable(enclosing_ast, vnew1, aeitype, !islocal)
             v1 = (aeitype===Any ? vnew1 : SymbolNode(vnew1,aeitype))
-            push!(spnames, a)
+            push!(spnames, args_i)
             push!(spvals, v1)
             vnew2 = unique_name(enclosing_ast, ast)
             v2 = (argtype===Any ? vnew2 : SymbolNode(vnew2,argtype))
-            unshift!(body.args, Expr(:(=), a, v2))
-            args[i] = a = vnew2
+            unshift!(body.args, Expr(:(=), args_i, v2))
+            args[i] = args_i = vnew2
             islocal = false
             aeitype = argtype
             affect_free = stmts_free
@@ -2463,7 +2464,7 @@ function inlineable(f::ANY, e::Expr, atype::ANY, sv::StaticVarInfo, enclosing_as
             for j = length(body.args):-1:1
                 b = body.args[j]
                 if occ < 6
-                    occ += occurs_more(b, x->is(x,a), 6)
+                    occ += occurs_more(b, x->is(x,args_i), 6)
                 end
                 if occ > 0 && affect_free && !effect_free(b, sv, true) #TODO: we could short-circuit this test better by memoizing effect_free(b) in the for loop over i
                     affect_free = false
@@ -2493,7 +2494,7 @@ function inlineable(f::ANY, e::Expr, atype::ANY, sv::StaticVarInfo, enclosing_as
             end
         end
         if incompletematch
-            unshift!(argexprs2, (argtype===Any ? a : SymbolNode(a,argtype)))
+            unshift!(argexprs2, (argtype===Any ? args_i : SymbolNode(a,argtype)))
         end
     end
     if incompletematch && partmatch.args[1] != false

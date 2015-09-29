@@ -237,7 +237,7 @@ static void NOINLINE NORETURN start_task()
     // this runs the first time we switch to a task
     jl_task_t *t = jl_current_task;
     throw_if_exception_set(t);
-    jl_value_t *res = jl_apply(t->start, NULL, 0);
+    jl_value_t *res = jl_do_call(t->start, NULL, 0);
     finish_task(t, res);
     abort();
 }

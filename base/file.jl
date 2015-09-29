@@ -14,7 +14,7 @@ function cd(dir::AbstractString)
 end
 cd() = cd(homedir())
 
-@unix_only function cd(f::Function, dir::AbstractString)
+@unix_only function cd(f, dir::AbstractString)
     fd = ccall(:open,Int32,(Ptr{UInt8},Int32),".",0)
     systemerror(:open, fd == -1)
     try
@@ -25,7 +25,7 @@ cd() = cd(homedir())
         systemerror(:close, ccall(:close,Int32,(Int32,),fd) != 0)
     end
 end
-@windows_only function cd(f::Function, dir::AbstractString)
+@windows_only function cd(f, dir::AbstractString)
     old = pwd()
     try
         cd(dir)
@@ -34,7 +34,7 @@ end
         cd(old)
     end
 end
-cd(f::Function) = cd(f, homedir())
+cd(f) = cd(f, homedir())
 
 function mkdir(path::AbstractString, mode::Unsigned=0o777)
     @unix_only ret = ccall(:mkdir, Int32, (Cstring,UInt32), path, mode)
