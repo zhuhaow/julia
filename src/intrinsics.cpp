@@ -608,12 +608,12 @@ static jl_cgval_t emit_runtime_pointerref(jl_value_t *e, jl_value_t *i, jl_codec
     Value *preffunc = // TODO: move this to the codegen initialization code section
         jl_Module->getOrInsertFunction("jl_pointerref",
                                        FunctionType::get(T_pjlvalue, two_pvalue_llvmt, false));
-    jl_cgval_t parg = emit_boxed_rooted(e, ctx);
+    jl_cgval_t parg = emit_expr(e, ctx);
     Value *iarg = boxed(emit_expr(i, ctx), ctx);
 #ifdef LLVM37
-    Value *ret = builder.CreateCall(prepare_call(preffunc), { parg.V, iarg });
+    Value *ret = builder.CreateCall(prepare_call(preffunc), { get_gcrooted(parg, ctx), iarg });
 #else
-    Value *ret = builder.CreateCall2(prepare_call(preffunc), parg.V, iarg);
+    Value *ret = builder.CreateCall2(prepare_call(preffunc), get_gcrooted(parg, ctx), iarg);
 #endif
     jl_value_t *ety;
     if (jl_is_cpointer_type(parg.typ)) {
@@ -674,13 +674,13 @@ static jl_cgval_t emit_runtime_pointerset(jl_value_t *e, jl_value_t *x, jl_value
     Value *psetfunc = // TODO: move this to the codegen initialization code section
         jl_Module->getOrInsertFunction("jl_pointerset",
                                        FunctionType::get(T_void, three_pvalue_llvmt, false));
-    jl_cgval_t parg = emit_boxed_rooted(e, ctx);
-    Value *iarg = emit_boxed_rooted(i, ctx).V;
+    jl_cgval_t parg = emit_expr(e, ctx);
+    Value *iarg = get_gcrooted(emit_expr(i, ctx), ctx);
     Value *xarg = boxed(emit_expr(x, ctx), ctx);
 #ifdef LLVM37
-    builder.CreateCall(prepare_call(psetfunc), { parg.V, xarg, iarg });
+    builder.CreateCall(prepare_call(psetfunc), { get_gcrooted(parg, ctx), xarg, iarg });
 #else
-    builder.CreateCall3(prepare_call(psetfunc), parg.V, xarg, iarg);
+    builder.CreateCall3(prepare_call(psetfunc), get_gcrooted(parg, ctx), xarg, iarg);
 #endif
     return parg;
 }
