@@ -484,6 +484,12 @@ function transact(f::Function, repo::GitRepo)
     end
 end
 
+function set_ssl_cert_locations(cert_path)
+    GIT_OPT_SET_SSL_CERT_LOCATIONS = 12
+    ccall((:git_libgit2_opts, :libgit2), Cint, (Cint, Ptr{Void}, Cstring),
+                        GIT_OPT_SET_SSL_CERT_LOCATIONS, C_NULL, cert_path)
+end
+
 
 function __init__()
     err = ccall((:git_libgit2_init, :libgit2), Cint, ())
@@ -491,6 +497,40 @@ function __init__()
     atexit() do
         ccall((:git_libgit2_shutdown, :libgit2), Cint, ())
     end
+
+    # Probe for openssl certificates installed on the system
+    @linux_only begin
+        openssl_dir = get(ENV, "OPENSSLDIR", "")
+
+        if openssl_dir == ""
+            try
+                # Next, try asking openssl for its directory
+                openssl_dir = split(readchomp(`openssl version -d`), "\"")[2]
+            catch
+                # If all else fails, resort to search; this list garnered from
+                # http://gagravarr.org/writing/openssl-certs/others.shtml
+                for dir in ["/usr/lib/ssl",
+                            "/etc/pki/tls",
+                            # These are less common
+                            "/usr/share/ssl",
+                            "/usr/ssl",
+                            "/usr/local/openssl",
+                            "/etc/openssl",
+                            "/etc/ssl",
+                            "/var/ssl"]
+                    if isdir(joinpath(dir,"certs"))
+                        openssl_dir = dir
+                    end
+                end
+            end
+        end
+
+        # If we found something promising, use it!
+        if openssl_dir != ""
+            set_ssl_cert_locations(joinpath(openssl_dir, "certs"))
+        end
+    end
+
 end
 
 end # module
