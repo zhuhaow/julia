@@ -246,6 +246,7 @@ static MDNode* tbaa_sveclen;           // The len in a jl_svec_t
 static MDNode* tbaa_func;           // A jl_function_t
 static MDNode* tbaa_datatype;       // A jl_datatype_t
 static MDNode* tbaa_const;          // Memory that is immutable by the time LLVM can see it
+static MDNode* tbaa_gcframe;        // A GC frame
 
 namespace llvm {
     extern Pass *createLowerSimdLoopPass();
@@ -3735,6 +3736,46 @@ static void clear_gc_frame(jl_gcinfo_t *gc)
     il.erase(gc->last_gcframe_inst);
 }
 
+// Decorate all stores and loads of derived pointers from the GC frame to have
+// tbaa_gcframe
+static void
+tbaa_decorate_gcframe(std::set<Instruction*> &visited, Instruction *inst)
+{
+    if (visited.find(inst) != visited.end())
+        return;
+    visited.insert(inst);
+#ifdef LLVM35
+    Value::user_iterator I = inst->user_begin(), E = inst->user_end();
+#else
+    Value::use_iterator I = inst->use_begin(), E = inst->use_end();
+#endif
+    for (;I != E;++I) {
+        Instruction *user = dyn_cast<Instruction>(*I);
+        if (!user) {
+            continue;
+        } else if (isa<GetElementPtrInst>(user)) {
+            if (__likely(user->getOperand(0) == inst)) {
+                tbaa_decorate_gcframe(visited, user);
+            }
+        } else if (isa<StoreInst>(user)) {
+            if (user->getOperand(1) == inst) {
+                tbaa_decorate(tbaa_gcframe, user);
+            }
+        } else if (isa<LoadInst>(user)) {
+            tbaa_decorate(tbaa_gcframe, user);
+        } else if (isa<BitCastInst>(user)) {
+            tbaa_decorate_gcframe(visited, user);
+        }
+    }
+}
+
+static void
+tbaa_decorate_gcframe(jl_codectx_t *ctx)
+{
+    std::set<Instruction*> visited;
+    tbaa_decorate_gcframe(visited, ctx->gc.gcframe);
+}
+
 static void
 emit_gcpops(jl_codectx_t *ctx)
 {
@@ -3781,6 +3822,7 @@ static void finalize_gc_frame(jl_codectx_t *ctx)
         builder.CreateStore(V_null, argTempi);
     }
     emit_gcpops(ctx);
+    tbaa_decorate_gcframe(ctx);
 }
 
 static Function *gen_cfun_wrapper(jl_function_t *ff, jl_value_t *jlrettype, jl_tupletype_t *argt, int64_t isref)
@@ -5227,6 +5269,7 @@ static void init_julia_llvm_env(Module *m)
     tbaa_func = tbaa_make_child("jtbaa_func",tbaa_value);
     tbaa_datatype = tbaa_make_child("jtbaa_datatype",tbaa_value);
     tbaa_const = tbaa_make_child("jtbaa_const",tbaa_root,true);
+    tbaa_gcframe = tbaa_make_child("jtbaa_gcframe",tbaa_root);
 
     // every variable or function mapped in this function must be
     // exported from libjulia, to support static compilation
