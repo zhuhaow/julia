@@ -33,10 +33,11 @@ before_install:
             export BUILDOPTS="$BUILDOPTS USE_SYSTEM_$lib=1";
         done;
         sudo add-apt-repository ppa:staticfloat/julia-deps -y;
+        sudo dpkg --add-architecture i386;
         sudo apt-get update -qq -y;
         if [ "$ARCH" = "i686" ]; then
           export BUILDOPTS="$BUILDOPTS MARCH=pentium4";
-          sudo apt-get remove libblas3gf liblapack3gf libarmadillo2 -y;
+          sudo apt-get remove libblas3gf liblapack3gf -y;
           sudo apt-get install binutils:i386 -y;
           sudo apt-get install gcc:i386 g++:i386 make:i386 cpp:i386 g++-4.6:i386 gcc-4.6:i386 libssl-dev:i386 patchelf:i386 gfortran:i386 llvm-3.3-dev:i386 libsuitesparse-dev:i386 libopenblas-dev:i386 libopenblas-base:i386 libblas-dev:i386 liblapack-dev:i386 liblapack3:i386 libarpack2-dev:i386 libarpack2:i386 libfftw3-dev:i386 libgmp-dev:i386 libpcre3-dev:i386 libunwind8-dev:i386 libmpfr-dev:i386 -y;
         else
