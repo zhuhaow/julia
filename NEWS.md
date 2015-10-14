@@ -37,10 +37,15 @@ Library improvements
 
   * New method for generic QR with column pivoting ([#13480]).
 
-  * A new `SparseVector` type allows for one-dimensional sparse arrays. Slicing
-    and reshaping sparse matrices now return vectors when appropriate. The
-    `sparsevec` function returns a one-dimensional sparse vector instead of a
-    one-column sparse matrix.
+  * Arrays:
+
+    * A new `SparseVector` type allows for one-dimensional sparse arrays. Slicing
+      and reshaping sparse matrices now return vectors when appropriate. The
+      `sparsevec` function returns a one-dimensional sparse vector instead of a
+      one-column sparse matrix.
+
+    * All dimensions indexed by scalars are now dropped, whereas previously only
+      trailing scalar dimensions would be omitted from the result.
 
 Deprecated or removed
 ---------------------
