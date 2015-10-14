@@ -6,7 +6,7 @@ env:
     - ARCH="i686"
     - ARCH="x86_64"
 sudo: required
-dist: trusty
+services: docker
 matrix:
   exclude:
     - os: osx
