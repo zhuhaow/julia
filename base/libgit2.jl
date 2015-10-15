@@ -213,10 +213,9 @@ function branch!(repo::GitRepo, branch_name::AbstractString,
             Oid(commit)
         end
         iszero(commit_id) && return
-
         cmt =  get(GitCommit, repo, commit_id)
         try
-            branch_ref = create_branch(repo, cmt, branch_name, force=force)
+            branch_ref = create_branch(repo, branch_name, cmt, force=force)
         finally
             finalize(cmt)
         end

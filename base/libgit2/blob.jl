@@ -5,7 +5,7 @@ function content(blob::GitBlob)
 end
 
 function isbinary(blob::GitBlob)
-    return ccall((:git_blob_is_binary, :libgit2), CInt, (Ptr{Void},), blob.ptr) == 1
+    return ccall((:git_blob_is_binary, :libgit2), Cint, (Ptr{Void},), blob.ptr) == 1
 end
 
 function Base.length(blob::GitBlob)
