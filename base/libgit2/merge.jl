@@ -73,20 +73,6 @@ function ffmerge!(repo::GitRepo, ann::GitAnnotated)
     return true
 end
 
-""" Merge changes into current head """
-function merge!(repo::GitRepo, anns::Vector{GitAnnotated},
-                merge_opts::MergeOptions = MergeOptions();
-                checkout_opts::CheckoutOptions = CheckoutOptions())
-    anns_size = Csize_t(length(anns))
-    @check ccall((:git_merge, :libgit2), Cint,
-                  (Ptr{Void}, Ptr{Ptr{Void}}, Csize_t,
-                   Ptr{MergeOptions}, Ptr{CheckoutOptions}),
-                   repo.ptr, anns, anns_size,
-                   Ref(merge_opts), Ref(checkout_opts))
-    info("Review and commit merged changes.")
-    return true
-end
-
 """Internal implementation of merge.
 Returns `true` if merge was successful, otherwise `false`
 """
