@@ -141,3 +141,7 @@ let x = Vector{Int}[[1,2], [3,4]]
     @test norm(x, 1) ≈ sqrt(5) + 5
     @test norm(x, 3) ≈ cbrt(sqrt(125)+125)
 end
+
+# test that LinAlg.axpy! works for element type without commutative multiplication
+x = [eye(2) for i = 1:4]
+@test LinAlg.axpy!(-eye(2), x, 2copy(x)) == x
